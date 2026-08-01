@@ -2,7 +2,7 @@
 
 ### A free, no-server proof-of-concept for finding *anything* — rentals, cars, houses, jobs — scored, mapped, and tracked.
 
-*Adapted from the **OIART Rental Finder** ( https://azr-erzr.github.io/oiart-rental-finder/ ). This guide shows anyone how to stand up the same kind of tool for their own search, and how to let an AI assistant (ChatGPT/Codex or Claude) do the heavy lifting.*
+*Adapted from the **OIART Rental Finder** ( https://azharmoolla.github.io/oiart-rental-finder/ ). This guide shows anyone how to stand up the same kind of tool for their own search, and how to let an AI assistant (ChatGPT/Codex or Claude) do the heavy lifting.*
 
 ---
 
@@ -48,7 +48,7 @@ That's it. No backend to run, nothing to pay for.
 ### Step 1. Grab the starter project
 Start from the working reference implementation:
 
-- **Repo:** `https://github.com/Azr-Erzr/oiart-rental-finder`
+- **Repo:** `https://github.com/AzharMoolla/oiart-rental-finder`
 - Click **Fork** (or **Use this template** / download the ZIP).
 
 You now have: `index.html`, `app.js`, `styles.css`, `oiart_listings.csv`, `oiart_sites.csv`, and `apps-script/OIART_WRITEBACK.gs`.
@@ -132,7 +132,7 @@ The **`Sites`** tab is just a checklist of where you search (e.g., for cars: Aut
 This is the part that makes it fast. You can hand an AI assistant the schema, the rubric, and a goal, and it will scaffold the app, design the scoring, and even **gather and enter listings** for you. Below is a copy-paste **Prompt Pack**.
 
 ### Prompt 1 — Scaffold / customize the app for a new domain
-> I'm building a personalized search-and-ranking web app from this starter repo: `https://github.com/Azr-Erzr/oiart-rental-finder`. It's a static page (`index.html`, `app.js`, `styles.css`) that reads a Google Sheet (tabs `Listings` + `Sites`), scores each row 0–100, maps it, and lets me filter/sort/track outreach.
+> I'm building a personalized search-and-ranking web app from this starter repo: `https://github.com/AzharMoolla/oiart-rental-finder`. It's a static page (`index.html`, `app.js`, `styles.css`) that reads a Google Sheet (tabs `Listings` + `Sites`), scores each row 0–100, maps it, and lets me filter/sort/track outreach.
 >
 > Adapt it for **[YOUR SEARCH — e.g., "used pickup trucks under $25k within 100 km of London, ON"]**. Specifically: (1) update the `Listings` column headers to fit this domain; (2) change the map anchor coordinates to **[YOUR DESTINATION]** (or remove the map if distance doesn't matter); (3) rewrite the `computeScore` function for the rubric I'll give you next; (4) keep the CSV fallback, the live-Sheet reader, and the workflow/archive features intact. Show me exactly which lines to change and why.
 

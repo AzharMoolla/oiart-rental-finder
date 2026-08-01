@@ -36,32 +36,25 @@ const CSV_FALLBACKS = {
    route links are computed against those. Stored in this browser only.
    ========================================================================== */
 const APP_NAME = "Home Finder";
-const MAX_POIS = 3;
-const DEFAULT_CONFIG = {
-  pois: [],            // up to MAX_POIS of {name, lat, lon}
-  budgetRent: 1000,    // monthly all-in target for rentals
-  budgetSale: 500000,  // purchase-price target for for-sale listings
-  routePoi: 0          // which place the Route buttons currently point at
-};
-let config = loadConfig();
-function loadConfig(){
-  try{
-    const c = JSON.parse(localStorage.getItem("hf_config"));
-    if(c && typeof c === "object") return {...DEFAULT_CONFIG, ...c, pois: (Array.isArray(c.pois) ? c.pois : []).slice(0, MAX_POIS)};
-  }catch(e){}
-  return {...DEFAULT_CONFIG, pois: []};
-}
-function saveConfig(){ try{ localStorage.setItem("hf_config", JSON.stringify(config)); }catch(e){} }
+/* Places, budgets and weightings all live in the ACTIVE PROFILE (profile.js),
+   so you can keep separate saved searches — e.g. "Waterloo" and "London" —
+   each with its own anchors, budget and priorities. `config` is a thin alias
+   onto that profile so the rest of this file reads naturally. */
+const config = new Proxy({}, {
+  get: (_, k) => activeProfile()[k],
+  set: (_, k, v) => { activeProfile()[k] = v; return true; }
+});
+function saveConfig(){ saveProfiles(); }
 function getPois(){
-  return (config.pois || []).filter(p => p && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lon)));
+  return poiListForScoring().filter(p => p && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lon)));
 }
 function activePoi(){
   const ps = getPois();
   if(!ps.length) return null;
-  return ps[Math.min(num(config.routePoi, 0), ps.length - 1)];
+  return ps[Math.min(num(activeProfile().routePoi, 0), ps.length - 1)];
 }
 function poiName(p, i){ return asText(p && p.name) || `Place ${i + 1}`; }
-function budgetFor(market){ return market === "sale" ? num(config.budgetSale, 500000) : num(config.budgetRent, 1000); }
+function budgetFor(market){ return budgetForMarket(market); }
 function fmtMoney(n){ return n >= 10000 ? "$" + Math.round(n / 1000) + "k" : "$" + Number(n).toLocaleString(); }
 function haversineKm(aLat, aLon, bLat, bLon){
   const R = 6371, toR = x => x * Math.PI / 180;
@@ -317,61 +310,80 @@ const CRITICAL_CAP = {0:100, 1:79, 2:69};
 
 function computeScore(r){
   const market = r.MarketType || "rent";
+  const W = weightsFor(market);          // priority-scaled maxima, total 100
   const comps = [];
-  const push = (key, label, max, res) => {
+  const hardCaps = [];                   // stated deal-breakers hit on this row
+  const push = (key, label, res) => {
+    const max = W[key] != null ? W[key] : BASE_WEIGHTS[key];
+    // Component results are authored on their base scale, then rescaled to the
+    // profile's weight so a 1–5 priority slider genuinely changes the ranking.
+    const scale = max / (BASE_WEIGHTS[key] || max || 1);
     if(res.na) comps.push({key, label, max, earned:0, na:true, level:"na", note:res.note || (label + " not stated")});
-    else comps.push({key, label, max, earned:Math.max(0, Math.min(max, res.pts)), na:false, level:res.level || "ok", note:res.note || ""});
+    else comps.push({key, label, max, earned:Math.max(0, Math.min(max, Math.round(res.pts * scale))), na:false, level:res.level || "ok", note:res.note || ""});
   };
 
-  // Location + commute /30 — priority-weighted distance to the user's places
-  // (POI 1 counts most), blended with the sheet's drive estimate when present.
-  push("location", "Location / commute", 30, (function(){
+  // Location + commute — priority-weighted distance to the user's places
+  // (Place 1 counts most), blended with the sheet's drive estimate when present.
+  // Bands are RELATIVE to the profile's max commute + travel mode, so the same
+  // engine works for a 10-minute walk-to-campus search and a 40-minute drive.
+  push("location", "Location / commute", (function(){
     const d = r.DriveNum, km = r.KmWeighted;
-    const driveBand = v => v <= 10 ? 30 : v <= 15 ? 26 : v <= 20 ? 18 : v <= 25 ? 12 : 8;
-    const kmBand = v => v <= 4 ? 30 : v <= 7 ? 26 : v <= 11 ? 18 : v <= 16 ? 12 : 8;
+    const maxMin = maxCommuteMin(), maxKm = maxRadiusKm();
+    const band = ratio => ratio <= 0.4 ? 30 : ratio <= 0.7 ? 26 : ratio <= 1.0 ? 20 : ratio <= 1.35 ? 12 : 8;
+    let pts = null, note = "";
     if(Number.isFinite(km)){
-      let pts = kmBand(km);
-      let note = `weighted ${km.toFixed(1)} km${r.PoiKmText ? " (" + r.PoiKmText + ")" : ""}`;
-      if(Number.isFinite(d)){ pts = Math.round((pts + driveBand(d)) / 2); note += ` · drive ~${d} min`; }
-      return {pts, level: pts <= 12 ? "warn" : "ok", note};
+      pts = band(km / maxKm);
+      note = `weighted ${km.toFixed(1)} km${r.PoiKmText ? " (" + r.PoiKmText + ")" : ""} vs ${maxKm.toFixed(0)} km target`;
+      if(Number.isFinite(d)){ pts = Math.round((pts + band(d / maxMin)) / 2); note += ` · drive ~${d} min`; }
+    } else if(Number.isFinite(d)){
+      pts = band(d / maxMin);
+      note = `drive ~${d} min vs ${maxMin} min limit`;
     }
-    if(Number.isFinite(d)) return {pts: driveBand(d), level: driveBand(d) <= 12 ? "warn" : "ok", note: "sheet drive estimate"};
-    return {na:true, note:"No distance known — set My places, or add coords / drive time"};
+    if(pts == null) return {na:true, note:"No distance known — set My places, or add coords / drive time"};
+    const overLimit = (Number.isFinite(d) && d > maxMin * 1.35) || (Number.isFinite(km) && km > maxKm * 1.35);
+    if(overLimit && hasDealBreaker("longCommute")) hardCaps.push("commute beyond your limit");
+    return {pts, level: pts <= 12 ? "warn" : "ok", note};
   })());
 
-  // Cost / value /20 — graduated against the market-specific budget target,
-  // so $1,000 rentals and $500k houses score on the same honest curve.
-  push("cost", market === "sale" ? "Price vs budget" : "Cost / all-in value", 20, (function(){
+  // Cost / value — graduated against the market budget, so $1,000 rentals and
+  // $500k houses score on the same honest curve. A "hard ceiling" budget bites
+  // harder (and can be a deal-breaker); "can stretch" keeps the gentler curve.
+  push("cost", market === "sale" ? "Price vs budget" : "Cost / all-in value", (function(){
     const v = r.RentNum;
     if(!Number.isFinite(v)) return {na:true, note:"Price not stated"};
-    const b = budgetFor(market);
+    const b = budgetFor(market), firm = budgetIsFirm();
     const allIn = market !== "sale" && (r.HasInternet || /all|incl/i.test(asText(r["Internet / utilities"])));
     const ratio = v / b;
     let pts;
     if(ratio <= 0.9) pts = allIn ? 20 : 18;
     else if(ratio <= 1.0) pts = allIn ? 19 : 16;
-    else if(ratio <= 1.15) pts = 14;
-    else if(ratio <= 1.3) pts = 11;
-    else if(ratio <= 1.5) pts = 8;
-    else if(ratio <= 1.8) pts = 5;
-    else pts = 3;
-    return {pts, level: ratio > 1.5 ? "warn" : "ok", note: `${Math.round(ratio * 100)}% of ${fmtMoney(b)} target`};
+    else if(ratio <= 1.15) pts = firm ? 10 : 14;
+    else if(ratio <= 1.3) pts = firm ? 6 : 11;
+    else if(ratio <= 1.5) pts = firm ? 4 : 8;
+    else if(ratio <= 1.8) pts = firm ? 2 : 5;
+    else pts = firm ? 1 : 3;
+    if(ratio > 1.02 && hasDealBreaker("overBudget")) hardCaps.push("over your budget");
+    return {pts, level: ratio > (firm ? 1.0 : 1.5) ? "warn" : "ok",
+      note: `${Math.round(ratio * 100)}% of ${fmtMoney(b)} target${firm ? " (hard ceiling)" : ""}`};
   })());
 
-  // Parking /10 (rubric's parking+internet 15, split 10/5 so each can be N/A)
-  push("parking", "Parking", 10, (function(){
+  // Parking
+  push("parking", "Parking", (function(){
     const t = asText(r.Parking).toLowerCase();
     if(truthy(r.ParkingConfirmed) || r.HasParking) return {pts:10, note:"parking available"};
-    if(/no parking|street only|no spot|no on-?site|unavailable|not included/.test(t)) return {pts:0, level:"bad", note:"No parking"};
+    if(/no parking|street only|no spot|no on-?site|unavailable|not included/.test(t)){
+      if(hasDealBreaker("noParking")) hardCaps.push("no parking");
+      return {pts:0, level:"bad", note:"No parking"};
+    }
     if(/extra|paid|\$|fee/.test(t)) return {pts:7, level:"warn", note:"paid parking"};
     return {na:true, note:"Parking not confirmed"};
   })());
 
-  // Internet / utilities /5 — RENTALS ONLY. Owners arrange their own service,
+  // Internet / utilities — RENTALS ONLY. Owners arrange their own service,
   // so for-sale rows skip this component entirely (the known-points
   // renormalization absorbs it; no fake "confirm internet" flags on houses).
   if(market !== "sale"){
-    push("internet", "Internet / utilities", 5, (function(){
+    push("internet", "Internet / utilities", (function(){
       const t = asText(r["Internet / utilities"]).toLowerCase();
       if(truthy(r.InternetConfirmed) || r.HasInternet || /all|incl/.test(t)) return {pts:5, note:"included"};
       if(/partial|some|hydro/.test(t)) return {pts:3, level:"warn", note:"partial"};
@@ -383,31 +395,46 @@ function computeScore(r){
   // Privacy + housing type /15 — market-aware:
   // rent: private unit > private room > shared; sale: property fit
   // (detached > semi/town > condo, which carries fees and less land).
-  push("privacy", market === "sale" ? "Property type / fit" : "Privacy / housing type", 15, (function(){
+  push("privacy", market === "sale" ? "Property type / fit" : "Privacy / housing type", (function(){
     const t = compact([r.Type, r["Criteria fit"]]).toLowerCase();
     if(!t) return {na:true, note:"Home type not stated"};
+    const p = activeProfile();
+    const wantsWhole = p.household === "family" || p.household === "couple";
     if(market === "sale"){
       if(/detached|house(?!hold)|bungalow|two-?stor/.test(t) && !/semi|town|condo/.test(t)) return {pts:15, note:"detached house"};
       if(/semi|town(house|home)|duplex|link/.test(t)) return {pts:13, note:"semi / townhouse"};
       if(/condo|apartment|loft|strata/.test(t)) return {pts:11, note:"condo / apartment (check fees)"};
       return {pts:9, note:"type unclear"};
     }
-    if(/basement|studio|bachelor|1-?bed|one bed|apartment|house(?!hold)|ensuite|en-suite|own bath|private bath|separate entrance/.test(t)) return {pts:15, note:"private unit / own bath"};
-    if(/shared bedroom|shared room/.test(t)) return {pts:5, level:"bad", note:"Shared bedroom"};
-    if(/private (room|bed)/.test(t)) return {pts:12, note:"private room"};
-    if(/room/.test(t)) return {pts:11, note:"room in shared house"};
+    if(/shared bedroom|shared room/.test(t)){
+      if(hasDealBreaker("sharedBedroom")) hardCaps.push("shared bedroom");
+      return {pts:5, level:"bad", note:"Shared bedroom"};
+    }
+    const whole = /basement|studio|bachelor|1-?bed|one bed|two bed|2-?bed|apartment|house(?!hold)|condo|town(house|home)|duplex|ensuite|en-suite|own bath|private bath|separate entrance/.test(t);
+    if(whole) return {pts:15, note:"private unit / own bath"};
+    // A room in a shared house is a poor fit for couples and families.
+    if(/private (room|bed)/.test(t)) return wantsWhole ? {pts:7, level:"warn", note:"room only — you wanted a whole place"} : {pts:12, note:"private room"};
+    if(/room/.test(t)) return wantsWhole ? {pts:6, level:"warn", note:"room only — you wanted a whole place"} : {pts:11, note:"room in shared house"};
     return {pts:8, note:"type unclear"};
   })());
 
   // Timing /10 — market-aware, graduated on what's actually stated.
   // rent: move-in timing; sale: possession/closing (tenanted = real gotcha).
-  push("lease", market === "sale" ? "Possession / closing" : "Move-in timing", 10, (function(){
+  push("lease", market === "sale" ? "Possession / closing" : "Move-in timing", (function(){
     if(truthy(r.JulyConfirmed)) return {pts:10, note:"timing confirmed"};
     const t = compact([r.Availability, r["What to verify"]]).toLowerCase();
+    const want = asText(activeProfile().timing).toLowerCase();
+    // If the profile names a target month and the listing states it, that's a
+    // direct hit — the strongest timing signal we can get.
+    const wantMonth = (want.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*/) || [])[0];
+    if(wantMonth && t.includes(wantMonth)) return {pts:10, note:`matches your target (${wantMonth})`};
     if(market === "sale"){
       if(/vacant|immediate|quick clos|flexible/.test(t)) return {pts:10, note:"vacant / flexible possession"};
       if(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b|\d{2,4}[-/]\d{1,2}/.test(t)) return {pts:9, note:"possession date stated"};
-      if(/tenant|leased|rented until/.test(t)) return {pts:5, level:"bad", note:"Tenanted — possession delayed"};
+      if(/tenant|leased|rented until/.test(t)){
+        if(hasDealBreaker("tenanted")) hardCaps.push("tenanted");
+        return {pts:5, level:"bad", note:"Tenanted — possession delayed"};
+      }
       return {na:true, note:"Possession not stated — confirm"};
     }
     if(/12[\s-]*month|year lease|12\s*mo/.test(t)) return {pts:10, note:"12-month lease"};
@@ -417,8 +444,8 @@ function computeScore(r){
     return {na:true, note:"Timing not stated — confirm"};
   })());
 
-  // Trust / clarity / quality /10 — always assessable
-  push("trust", "Trust / clarity", 10, (function(){
+  // Trust / clarity / quality — always assessable
+  push("trust", "Trust / clarity", (function(){
     let pts = 10; const notes = [];
     const kind = String(r.ListingKind || "").toLowerCase();
     const risk = asText(r.ScamRisk).toLowerCase();
@@ -426,7 +453,10 @@ function computeScore(r){
     else if(/med/.test(risk)){ pts -= 3; notes.push("medium scam risk"); }
     if(/search|needs/.test(kind)){ pts -= 3; notes.push("no direct listing URL"); }
     const addr = asText(r["Address / locator"]).toLowerCase();
-    if(!addr || /area only|approx|unknown/.test(addr)){ pts -= 2; notes.push("no exact address"); }
+    if(!addr || /area only|approx|unknown/.test(addr)){
+      pts -= 2; notes.push("no exact address");
+      if(hasDealBreaker("noAddress")) hardCaps.push("no exact address");
+    }
     if(!listingImageUrl(r)) pts -= 1;
     if(pts < 0) pts = 0;
     return {pts, level: pts <= 4 ? "bad" : "ok", note:notes.join(", ")};
@@ -434,18 +464,19 @@ function computeScore(r){
 
   const known = comps.filter(c => !c.na);
   const knownMax = known.reduce((a, c) => a + c.max, 0);
-  const totalMax = comps.reduce((a, c) => a + c.max, 0); // 100 rent · 95 sale (no internet comp)
+  const totalMax = comps.reduce((a, c) => a + c.max, 0);
   const earned = known.reduce((a, c) => a + c.earned, 0);
   const raw = knownMax ? Math.max(0, Math.min(100, Math.round(earned / knownMax * 100))) : 0;
   // Cap one band per missing must-have so an unknown essential can't inflate.
-  // Rent must-haves: location, cost, parking. Sale: location, cost (parking is
-  // usually visible on house listings and would false-cap every condo).
-  const critKeys = market === "sale" ? ["location", "cost"] : CRITICAL_KEYS;
+  // Which criteria are "must-have" comes from the questionnaire (profile.js).
+  const critKeys = criticalKeysFor(market);
   const criticalUnknown = comps.filter(c => c.na && critKeys.includes(c.key)).map(c => c.key);
-  const cap = criticalUnknown.length >= 3 ? 59 : CRITICAL_CAP[criticalUnknown.length];
+  let cap = criticalUnknown.length >= 3 ? 59 : CRITICAL_CAP[criticalUnknown.length];
+  // A STATED deal-breaker is worse than an unknown: hard-cap into "cut" range.
+  if(hardCaps.length) cap = Math.min(cap, 45);
   const total = Math.min(raw, cap);
   return {
-    total, raw, cap, criticalUnknown,
+    total, raw, cap, criticalUnknown, hardCaps,
     components: comps,
     unconfirmed: comps.filter(c => c.na).map(c => c.key),
     negatives: comps.filter(c => c.level === "bad").map(c => c.key),
@@ -455,6 +486,7 @@ function computeScore(r){
 
 // '' (essentials known), 'scorewarn' (1 must-have missing), 'scorecrit' (2+).
 function scoreLevelClass(r){
+  if((r.ScoreHardCaps || []).length) return "scorecrit";
   const n = (r.ScoreCritUnknown || []).length;
   return n >= 2 ? "scorecrit" : n === 1 ? "scorewarn" : "";
 }
@@ -478,6 +510,7 @@ function scoreBreakdown(r){
 function scoreFlags(r){
   const comps = r.ScoreComponents || [];
   const chips = [];
+  (r.ScoreHardCaps || []).forEach(h => chips.push(`<span class="flagchip breaker" title="You marked this a deal-breaker — score hard-capped">✕ ${safe(h)}</span>`));
   comps.forEach(c => {
     if(c.na) chips.push(`<span class="flagchip na" title="Not stated in the listing yet — contact to confirm">Confirm ${safe(SCORE_SHORT[c.key] || c.label)}</span>`);
     else if(c.level === "bad") chips.push(`<span class="flagchip bad" title="${safe(c.note || c.label)}">${safe(c.note || c.label)}</span>`);
@@ -496,6 +529,7 @@ function scoreTipHTML(r){
   }).join("");
   const notes = [];
   const tmax = Number.isFinite(r.ScoreTotalMax) ? r.ScoreTotalMax : 100;
+  if((r.ScoreHardCaps || []).length) notes.push(`✕ deal-breaker: ${r.ScoreHardCaps.join(", ")} — capped at ${r.ScoreCap}`);
   if(Number.isFinite(r.ScoreKnownMax) && r.ScoreKnownMax < tmax) notes.push(`scored on ${r.ScoreKnownMax}/${tmax} known points`);
   if(r.ScoreComputed && (r.ScoreCritUnknown || []).length) notes.push(`⚠ capped at ${r.ScoreCap} — must-have unconfirmed: ${r.ScoreCritUnknown.map(k => SCORE_SHORT[k] || k).join(", ")}`);
   if(r.ScoreComputed && Number.isFinite(r.ScoreSheet)) notes.push(`sheet had ${r.ScoreSheet}`);
@@ -606,6 +640,7 @@ function deriveListing(o){
   o.ScoreRaw         = auto.raw;
   o.ScoreCap         = auto.cap;
   o.ScoreCritUnknown = auto.criticalUnknown;
+  o.ScoreHardCaps    = auto.hardCaps || [];
   o.ScoreComponents  = auto.components;
   o.ScoreUnconfirmed = auto.unconfirmed;
   o.ScoreNegatives   = auto.negatives;
@@ -1226,6 +1261,18 @@ if(masterBtn) masterBtn.onclick=exportMasterCsv;
 /* ===================== My places (POIs) + route selector ================== */
 function reDeriveAll(){ rows.forEach(deriveListing); }
 
+/* Single entry point for anything that changes the active profile (the
+   questionnaire, the profile switcher, the places panel): re-score every row
+   against the new preferences and repaint the whole board. */
+window.applyProfileChange = function(opts){
+  reDeriveAll();
+  renderKPIs();
+  renderPois();
+  renderRouteSelect();
+  renderProfileSwitch();
+  render({fitMap: !!(opts && opts.fitMap)});
+};
+
 // Global "Route to" selector — all card/table Route buttons follow this.
 function renderRouteSelect(){
   const wrap=el("routewrap"), sel=el("routePoi");
@@ -1307,6 +1354,31 @@ if(hasMap){
     pendingPoiSet=-1;
   });
 }
+
+/* ---- profile switcher (e.g. "Waterloo" vs "London") --------------------- */
+function renderProfileSwitch(){
+  const sel = el("profileSwitch");
+  if(!sel) return;
+  sel.innerHTML = HF.list.map(p => `<option value="${safe(p.id)}"${p.id===HF.activeId?" selected":""}>${safe(p.name)}</option>`).join("")
+    + `<option value="__new">+ New search…</option>`;
+}
+const profSel = el("profileSwitch");
+if(profSel) profSel.addEventListener("change", e => {
+  const v = e.target.value;
+  if(v === "__new"){
+    const name = prompt("Name this search (e.g. Waterloo, London, Downtown condo):", "New search");
+    if(!name){ renderProfileSwitch(); return; }
+    addProfile(name.trim());
+    window.applyProfileChange({fitMap:true});
+    toast(`Created "${name.trim()}" — set its places and tune the scoring.`);
+    if(window.openQuestionnaire) window.openQuestionnaire();
+    return;
+  }
+  setActiveProfile(v);
+  window.applyProfileChange({fitMap:true});
+  toast(`Switched to "${activeProfile().name}" — everything re-scored.`);
+});
+renderProfileSwitch();
 renderRouteSelect();
 const printBtn=el("printView");
 if(printBtn) printBtn.onclick=()=>window.print();

@@ -29,6 +29,9 @@
       const r = el.getBoundingClientRect();
       if (r.top < innerHeight * 0.9) el.classList.add("in");
     }));
+    // Safety net: rAF and IntersectionObserver are both throttled in background
+    // tabs, so guarantee everything is visible shortly after load either way.
+    setTimeout(() => reveals.forEach(el => el.classList.add("in")), 1500);
   }
 
   /* ---- optional motion.dev spring for KPI pulse (graceful if offline) ---- */

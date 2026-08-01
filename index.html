@@ -21,7 +21,10 @@
     <a href="#sites-panel">Sites</a>
   </nav>
   <span class="spacer"></span>
+  <label class="sronly" for="profileSwitch">Active search</label>
+  <select class="profileswitch" id="profileSwitch" title="Switch between saved searches — each keeps its own places, budget and scoring weights"></select>
   <button class="placesbtn" id="poiBtn" type="button" title="Set up to three anchor places — distances, rings, scores and routes measure to them">📍 My places</button>
+  <button class="tunebtn" id="qopen" type="button" title="Answer a few questions and the ranking re-tunes to your priorities">✨ Tune my search</button>
   <span class="sourcebadge" id="sourceBadge">Loading data...</span>
   <button class="dl" id="downloadMaster" type="button" title="Download every listing (all columns) as a CSV"><span>⬇ Export master CSV</span></button>
 </div>
@@ -184,13 +187,34 @@
   <div class="footlinks">
     <a href="Build_Your_Own_Search_Tracker_Guide.pdf" download>Build-your-own guide (PDF)</a>
     <span aria-hidden="true">·</span>
-    <a href="https://github.com/Azr-Erzr/oiart-rental-finder/blob/main/SCORING_METHODOLOGY.md" target="_blank" rel="noopener">Scoring methodology</a>
+    <a href="https://github.com/AzharMoolla/oiart-rental-finder/blob/main/SCORING_METHODOLOGY.md" target="_blank" rel="noopener">Scoring methodology</a>
     <span aria-hidden="true">·</span>
-    <a href="https://github.com/Azr-Erzr/oiart-rental-finder" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://github.com/AzharMoolla/oiart-rental-finder" target="_blank" rel="noopener">GitHub</a>
   </div>
 </footer>
 
+<div class="quiz" id="quiz" hidden>
+  <div class="quizback" id="quizback"></div>
+  <div class="quizcard" role="dialog" aria-modal="true" aria-labelledby="qtitle">
+    <div class="quizhead">
+      <div>
+        <div class="kicker">Tune the ranking</div>
+        <h3 id="qtitle">A few questions about your search</h3>
+      </div>
+      <button class="quizx" id="qclose" type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="qsteps" id="qsteps"></div>
+    <div class="qbody" id="qbody"></div>
+    <div class="quizfoot">
+      <button class="btn" id="qback" type="button">Back</button>
+      <button class="btn primary" id="qnext" type="button">Next</button>
+    </div>
+  </div>
+</div>
+
+<script src="profile.js"></script>
 <script src="app.js"></script>
+<script src="questionnaire.js"></script>
 <script src="enhance.js"></script>
 </body>
 </html>
