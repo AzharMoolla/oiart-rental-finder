@@ -802,7 +802,12 @@ function renderPois(){
 }
 if(hasMap){
   renderPois();
-  map.on("moveend zoomend",()=>{ if(currentFilteredList.length) renderLeadPanel(); });
+  // Panning fires moveend repeatedly; coalesce so the cards rebuild once.
+  let panTimer=null;
+  map.on("moveend zoomend",()=>{
+    clearTimeout(panTimer);
+    panTimer=setTimeout(()=>{ if(currentFilteredList.length) renderLeadPanel(); }, 140);
+  });
 }
 
 let markers=[], markerById={}, currentFilteredList=[];
@@ -1196,7 +1201,12 @@ function renderSites(){
   el("sites").innerHTML=html;
 }
 
-["search","volume","market","neighbourhood","source","drive"].forEach(id=>{const e=el(id);if(e)e.addEventListener("input",render);});
+/* Typing in Search re-rendered the whole table + map on EVERY keystroke.
+   Debounce the free-text/number fields; selects still apply instantly. */
+let filterTimer=null;
+function renderDebounced(){ clearTimeout(filterTimer); filterTimer=setTimeout(()=>render(), 180); }
+["search","drive"].forEach(id=>{const e=el(id);if(e)e.addEventListener("input",renderDebounced);});
+["volume","market","neighbourhood","source"].forEach(id=>{const e=el(id);if(e)e.addEventListener("change",render);});
 function toggle(id,key){el(id).onclick=()=>{state[key]=!state[key];el(id).classList.toggle("active",state[key]);render();};}
 toggle("under1000","under1000");toggle("parking","parking");toggle("internet","internet");toggle("newonly","newonly");
 document.querySelectorAll("[data-filter]").forEach(btn => {
@@ -1512,10 +1522,14 @@ init();
 function isEditing(){
   if(document.querySelector(".workflowedit[open]")) return true;
   if(el("copyFallback")) return true;
+  if(document.getElementById("quiz") && !document.getElementById("quiz").hidden) return true;
   const a=document.activeElement;
   return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
 }
-setInterval(()=>{ if(!isEditing()) init(); }, 60000);
+// Also skip the poll while the tab is in the background: a hidden tab that
+// keeps refetching and re-rendering is the main way this page bogs a machine
+// down over a long session.
+setInterval(()=>{ if(!isEditing() && !document.hidden) init(); }, 60000);
 
 /* ============================================================================
    OPTIONAL TRUE WRITE-BACK MODULE
