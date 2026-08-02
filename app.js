@@ -667,7 +667,10 @@ async function loadSheet(url, kind){
 }
 
 async function loadSheetWithTabs(kind){
-  const tabs = SHEET_TAB_CANDIDATES[kind] || [kind];
+  // The active profile can name its own tab (e.g. "WATERLOO LISTINGS"), so one
+  // workbook can hold several searches. Falls back to the generic candidates.
+  const chosen = (typeof profileSheetTab === "function") ? profileSheetTab(kind) : "";
+  const tabs = chosen ? [chosen, ...(SHEET_TAB_CANDIDATES[kind] || [])] : (SHEET_TAB_CANDIDATES[kind] || [kind]);
   let lastErr;
   for(const tab of tabs){
     try{
@@ -803,6 +806,7 @@ if(hasMap){
 }
 
 let markers=[], markerById={}, currentFilteredList=[];
+let lastLoadedTab = null;   // which Sheet tab the current rows came from
 let selectedListingId = "";
 let hasRenderedData = false;
 function popup(r){
@@ -1265,6 +1269,10 @@ function reDeriveAll(){ rows.forEach(deriveListing); }
    questionnaire, the profile switcher, the places panel): re-score every row
    against the new preferences and repaint the whole board. */
 window.applyProfileChange = function(opts){
+  // Switching to a profile that reads a different Sheet tab needs a refetch,
+  // not just a re-score. Only refetch when the tab actually changed.
+  const wantTab = (typeof profileSheetTab === "function") ? profileSheetTab("listings") : "";
+  if(wantTab !== lastLoadedTab){ init(); return; }
   reDeriveAll();
   renderKPIs();
   renderPois();
@@ -1296,9 +1304,10 @@ function fillPoiPanel(){
     row.querySelector('[data-f="lat"]').value  = p.lat!=null&&p.lat!=="" ? p.lat : "";
     row.querySelector('[data-f="lon"]').value  = p.lon!=null&&p.lon!=="" ? p.lon : "";
   }
-  const br=el("budgetRent"), bs=el("budgetSale");
+  const br=el("budgetRent"), bs=el("budgetSale"), st=el("sheetTab");
   if(br) br.value=num(config.budgetRent,1000);
   if(bs) bs.value=num(config.budgetSale,500000);
+  if(st) st.value=asText(activeProfile().sheetTab);
 }
 
 function savePoiPanel(){
@@ -1314,11 +1323,19 @@ function savePoiPanel(){
   }
   config.pois=pois.slice(0,MAX_POIS);
   config.routePoi=Math.min(num(config.routePoi,0),Math.max(pois.length-1,0));
-  const br=el("budgetRent"), bs=el("budgetSale");
+  const br=el("budgetRent"), bs=el("budgetSale"), st=el("sheetTab");
   if(br&&parseFloat(br.value)>0) config.budgetRent=parseFloat(br.value);
   if(bs&&parseFloat(bs.value)>0) config.budgetSale=parseFloat(bs.value);
+  const tabChanged = st && asText(st.value) !== asText(activeProfile().sheetTab);
+  if(st) activeProfile().sheetTab = asText(st.value);
   saveConfig();
-  renderPois(); reDeriveAll(); renderKPIs(); renderRouteSelect(); render({fitMap:true});
+  renderPois(); renderRouteSelect();
+  if(tabChanged){
+    toast(`Loading "${asText(st.value) || "default tab"}" from the Sheet…`);
+    init();   // different tab -> refetch rather than just re-score
+    return;
+  }
+  reDeriveAll(); renderKPIs(); render({fitMap:true});
   toast(pois.length?`Saved ${pois.length} place${pois.length===1?"":"s"} — distances, scores and routes updated.`:"Saved. Add at least one place to unlock distances and routes.");
 }
 
@@ -1469,9 +1486,10 @@ async function init(){
   setSourceBadge("Loading Sheet","warn");
   try{
     const [r,s]=await Promise.all([loadSheetWithTabs("listings"), loadSheetWithTabs("sites")]);
+    lastLoadedTab = (typeof profileSheetTab === "function") ? profileSheetTab("listings") : "";
     applyData({rows:r,sites:s}); cacheSave();
     setSourceBadge("Live Sheet","ok");
-    setStatus(`Live — ${r.length} listings loaded from the Sheet at ${new Date().toLocaleTimeString()}.`,"ok");
+    setStatus(`Live — ${r.length} listings loaded from ${lastLoadedTab ? `"${lastLoadedTab}"` : "the Sheet"} at ${new Date().toLocaleTimeString()}.`,"ok");
     setTimeout(()=>setStatus("",""),4000);
   }catch(e){
     try{

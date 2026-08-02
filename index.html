@@ -178,6 +178,16 @@
     <div><label for="budgetRent">Rent budget / month</label><input id="budgetRent" type="number" min="1" placeholder="1000"></div>
     <div><label for="budgetSale">Purchase budget</label><input id="budgetSale" type="number" min="1" placeholder="500000"></div>
   </div>
+  <div class="poitab">
+    <label for="sheetTab">Sheet tab for this search</label>
+    <input id="sheetTab" list="sheetTabOptions" placeholder="leave blank for the default tab">
+    <datalist id="sheetTabOptions">
+      <option value="WATERLOO LISTINGS"></option>
+      <option value="OIART BASED LISTINGS"></option>
+      <option value="Listings"></option>
+    </datalist>
+    <p class="poisub" style="margin:6px 0 0">Point each saved search at its own tab in the same workbook, so one Sheet can hold several searches.</p>
+  </div>
   <div class="links" style="justify-content:flex-end"><button id="poiSave" class="linkbtn copy" type="button"><b>Save places</b></button></div>
 </div>
 

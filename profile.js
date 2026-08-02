@@ -40,7 +40,9 @@ const DEFAULT_PROFILE = {
   priorities: { location:3, cost:3, parking:3, internet:3, privacy:3, lease:3, trust:3 },
   verifiedOnly: false,            // true = wary of classifieds/FSBO -> trust matters more
   timing: "",                     // free text, e.g. "July 2026" / "flexible"
-  tuned: false                    // has the questionnaire been completed?
+  tuned: false,                   // has the questionnaire been completed?
+  sheetTab: "",                   // Google Sheet tab to read for THIS search
+  sitesTab: ""                    // optional per-search Sites tab ("" = default)
 };
 
 let HF = loadProfiles();
@@ -163,6 +165,12 @@ function maxRadiusKm(){
 function maxCommuteMin(){ return Math.max(5, Number(activeProfile().maxCommute) || 25); }
 
 function poiListForScoring(){ return activeProfile().pois || []; }
+// Sheet tab this profile reads. "" = fall back to the app defaults.
+function profileSheetTab(kind){
+  const p = activeProfile();
+  const v = kind === "sites" ? p.sitesTab : p.sheetTab;
+  return String(v || "").trim();
+}
 function budgetForMarket(market){
   const p = activeProfile();
   return market === "sale" ? (Number(p.budgetSale) || 500000) : (Number(p.budgetRent) || 1000);
