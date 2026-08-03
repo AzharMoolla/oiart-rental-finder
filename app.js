@@ -1288,6 +1288,7 @@ window.applyProfileChange = function(opts){
   renderPois();
   renderRouteSelect();
   renderProfileSwitch();
+  if(typeof renderDataTab === "function") renderDataTab();
   render({fitMap: !!(opts && opts.fitMap)});
 };
 
@@ -1382,6 +1383,27 @@ if(hasMap){
   });
 }
 
+/* ---- visible "Data tab" picker in the toolbar --------------------------- */
+/* Known tabs in this workbook. Add more here (or type one in My places) and
+   they appear in the dropdown. "" = whatever the app finds by default. */
+const KNOWN_TABS = ["OIART BASED LISTINGS", "WATERLOO LISTINGS", "Listings"];
+function renderDataTab(){
+  const sel = el("dataTab");
+  if(!sel) return;
+  const cur = asText(activeProfile().sheetTab);
+  const opts = [...new Set([...(cur ? [cur] : []), ...KNOWN_TABS])];
+  sel.innerHTML = `<option value="">Default tab</option>` +
+    opts.map(t => `<option value="${safe(t)}"${t === cur ? " selected" : ""}>${safe(t)}</option>`).join("");
+}
+const dataTabSel = el("dataTab");
+if(dataTabSel) dataTabSel.addEventListener("change", e => {
+  activeProfile().sheetTab = asText(e.target.value);
+  saveConfig();
+  toast(`Loading "${asText(e.target.value) || "default tab"}"…`);
+  init();
+});
+renderDataTab();
+
 /* ---- profile switcher (e.g. "Waterloo" vs "London") --------------------- */
 function renderProfileSwitch(){
   const sel = el("profileSwitch");
@@ -1464,7 +1486,9 @@ function applyData(d){
   rows = (d && d.rows) || [];
   sites = (d && d.sites) || [];
   const shouldFitMap = !hasRenderedData;
-  renderKPIs(); populateFilters(); renderSites(); render({fitMap: shouldFitMap});
+  renderKPIs(); populateFilters(); renderSites();
+  if(typeof renderDataTab === "function") renderDataTab();
+  render({fitMap: shouldFitMap});
   hasRenderedData = true;
 }
 function cacheSave(){ try{ localStorage.setItem("oiart_cache", JSON.stringify({rows,sites,ts:Date.now()})); }catch(e){} }
