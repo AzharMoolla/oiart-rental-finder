@@ -1383,28 +1383,12 @@ if(hasMap){
   });
 }
 
-/* ---- visible "Data tab" picker in the toolbar --------------------------- */
-/* Known tabs in this workbook. Add more here (or type one in My places) and
-   they appear in the dropdown. "" = whatever the app finds by default. */
-const KNOWN_TABS = ["OIART BASED LISTINGS", "WATERLOO LISTINGS", "Listings"];
-function renderDataTab(){
-  const sel = el("dataTab");
-  if(!sel) return;
-  const cur = asText(activeProfile().sheetTab);
-  const opts = [...new Set([...(cur ? [cur] : []), ...KNOWN_TABS])];
-  sel.innerHTML = `<option value="">Default tab</option>` +
-    opts.map(t => `<option value="${safe(t)}"${t === cur ? " selected" : ""}>${safe(t)}</option>`).join("");
-}
-const dataTabSel = el("dataTab");
-if(dataTabSel) dataTabSel.addEventListener("change", e => {
-  activeProfile().sheetTab = asText(e.target.value);
-  saveConfig();
-  toast(`Loading "${asText(e.target.value) || "default tab"}"…`);
-  init();
-});
-renderDataTab();
+/* The workbook now runs off ONE listings tab, so the tab picker was removed.
+   profile.sheetTab still exists in the data model (a fork can point separate
+   searches at separate tabs) but nothing in this UI sets it. */
+function renderDataTab(){ /* no-op: single-tab workbook */ }
 
-/* ---- profile switcher (e.g. "Waterloo" vs "London") --------------------- */
+/* ---- profile switcher (scoring presets, e.g. "Waterloo" vs "London") ---- */
 function renderProfileSwitch(){
   const sel = el("profileSwitch");
   if(!sel) return;

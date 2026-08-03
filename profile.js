@@ -59,6 +59,9 @@ function normalizeProfile(p){
   out.mustHaves = Array.isArray(out.mustHaves) ? out.mustHaves : [];
   out.dealBreakers = Array.isArray(out.dealBreakers) ? out.dealBreakers : [];
   out.routePoi = Math.min(Math.max(0, Number(out.routePoi) || 0), Math.max(out.pois.length - 1, 0));
+  // The workbook was consolidated to a single listings tab. Clear any stored
+  // pointer at the retired tab so old browsers heal themselves on next load.
+  if(/^WATERLOO LISTINGS$/i.test(String(out.sheetTab || "").trim())) out.sheetTab = "";
   return out;
 }
 
