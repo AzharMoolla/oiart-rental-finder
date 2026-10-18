@@ -170,7 +170,8 @@
     inFlight.add(p.id);
     try{
       const res=await fetch(WRITE_URL,{method:"POST",body:JSON.stringify({action:"saveProfile",profile:pending.profile,expectedUpdatedAt:pending.expectedUpdatedAt,...(WRITE_TOKEN?{token:WRITE_TOKEN}:{})}),signal:AbortSignal.timeout(15000)});
-      const data=await res.json();
+      if(!res.ok)throw new Error('Sheet unavailable (HTTP '+res.status+'). Open Choose profile to retry.');
+      let data;try{data=await res.json();}catch{throw new Error('Unreadable Sheet response. Check the Apps Script deployment.');}
       if(data.code==='PROFILE_CONFLICT'){pending.conflict=true;throw new Error(data.error);}
       if(!res.ok || data.ok!==true || data.action!=="saveProfile" || data.id!==p.id || !data.updatedAt)throw new Error(data.error||"The endpoint did not confirm a profile save");
       revisions[p.id]=data.updatedAt;

@@ -4,6 +4,7 @@ import {chromium} from '../.local-tools/browser/node_modules/playwright/index.mj
 // Every profile request is intercepted; no QA data reaches the real Sheet.
 const browser=await chromium.launch({channel:'msedge',headless:true});
 const saved=new Map();let clock=0,offline=false;
+const baseUrl=process.env.BASE_URL||'http://127.0.0.1:4186/';
 async function device(){
   const context=await browser.newContext(),page=await context.newPage();
   await context.route('https://script.google.com/**',async route=>{
@@ -21,7 +22,7 @@ async function device(){
     else result={ok:true,capabilities:['workflow','saveProfile','listProfiles','profileRevisions']};
     await route.fulfill({json:result});
   });
-  await page.goto('http://127.0.0.1:4186/?search=trent-peterborough');
+  await page.goto(baseUrl+'?search=trent-peterborough');
   await page.locator('#profileSearch').waitFor();return page;
 }
 async function finish(page){for(let i=0;i<5;i++)await page.click('#qnext');await page.click('#qnext');await page.waitForFunction(()=>document.getElementById('quiz').hidden);}
