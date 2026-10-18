@@ -76,7 +76,7 @@ checkbox stays disabled when the endpoint does not advertise the capability.
 
 Reviewed and installed locally, not bundled into the public website:
 
-- Candidate chosen: https://github.com/maxaiassistant77/facebook-marketplace-mcp
+- Original candidate (now superseded): https://github.com/maxaiassistant77/facebook-marketplace-mcp
   at commit `8808be39731d8f24472f541aecf0317d4304dfcf`, MIT. Windows-compatible
   Node stdio server, three read tools, no Facebook password/cookie requirement.
   Its original dependency audit had eight findings; updated dependencies in the
@@ -117,10 +117,58 @@ Reviewed and installed locally, not bundled into the public website:
 | Failed-write rollback and successful-write acknowledgement | PASS | Browser tests with mocked endpoint responses |
 | Native Sheet mutation and cleanup backup | PASS | Connector read-back and ignored backup |
 | Local Marketplace/browser MCP protocol | PASS | Tool discovery and actual smoke queries |
-| Fresh Canadian Marketplace results/images | BLOCKED | Live query returned no results; login/browser search needed |
+| Fresh Canadian Marketplace results/images | PASS | Replacement Secondhand MCP returned Peterborough rooms, descriptions, and photo URLs; availability still unverified |
 | Live endpoint write and connector read-back | PASS | Browser-origin A1 audit-only POST succeeded; native read confirmed it |
 | Live shared profile saves and v3 protections | BLOCKED | Old deployed version; owner redeployment required |
 | Full manual accessibility / screen-reader review | NOT RUN | Keyboard focus and mobile checks do not replace it |
 
 Preview: `http://127.0.0.1:4186/?search=trent-peterborough` while the local server
 is running. Browser QA writes screenshots only to ignored `.local-tools/qa/`.
+
+## User-Authorized Three-Month Cleanup
+
+On October 18, 2026 the user explicitly expanded cleanup to listings added over
+three calendar months ago, regardless of whether removal from the market could
+be independently confirmed. The cutoff for this pass was July 18, 2026.
+
+- Deleted 97 May/June entries; retained 18 August 2 entries. No listing facts
+  were changed into guessed availability claims.
+- Eleven Date seen cells had been overwritten with verification notes. Their
+  original added dates were recovered from the initial CSV commit
+  `475cbf213d05f79c59281390aa65c4effb800d8a`, matching ID, title, and source before
+  using the date. Last checked was not substituted for an added date.
+- A complete pre-deletion native/value backup, date evidence, and deletion plan
+  are in ignored `.local-tools/backups/rental-sheet-before-age-cleanup-2026-10-18.json`.
+- The Sheet was reread immediately before the single deletion batch, the 18
+  remaining IDs were verified, and CSV fallbacks were regenerated afterward.
+- This was an executed cleanup pass, not an unattended scheduled deletion job.
+
+## Working Marketplace Replacement
+
+- Installed https://github.com/jlsookiki/secondhand-mcp, version 0.7.1, commit
+  `d7385b59d7e3691ab8609425330134b956314661`, MIT. Read its complete README (the
+  only tracked Markdown documentation), license, configuration, requirements,
+  limitations, and relevant search/transport/detail source before running it.
+- Its public HTML fallback handles the empty GraphQL feed that broke the first
+  adapter. No login was needed for the tested public searches or listing pages.
+  This does not guarantee that every Facebook page is accessible without login.
+- Registered as `secondhand-facebook` with `MARKETPLACES=facebook`; removed the
+  nonworking old server registration. The old source remains ignored for reference.
+  `housing-browser` remains the logged-in browser fallback.
+- Installed with dependency scripts disabled. Updated SDK, Puppeteer, Undici,
+  and vulnerable transitive dependencies in the ignored checkout. Production
+  dependency audit: zero findings. The updated build and all 674 upstream tests
+  passed. No paid cloud service, login-cookie extraction, or browser profile
+  import was needed.
+- Real MCP smoke tests returned Toronto sofas, New York bicycles, and three
+  Peterborough room leads, all with image URLs. Detail calls returned actual
+  descriptions and full-size photo URLs for all three Peterborough leads.
+- Examples: item `4563452213800605` describes a furnished private room near
+  Jackson Park/PRHC; `2368598113885134` is called private in the result title but
+  its description says shared. This is why titles alone must never establish
+  private-bedroom fit. These diagnostic leads were NOT inserted into the Sheet
+  as verified matches; the friend's brief and actual availability remain pending.
+- Retest: `node scripts/check-secondhand.mjs --broad`. Full diagnostic results
+  stay ignored in `.local-tools/secondhand-check-results.json` and
+  `.local-tools/peterborough-mcp-details.json`. New Codex sessions may be needed
+  to load the registered tools.

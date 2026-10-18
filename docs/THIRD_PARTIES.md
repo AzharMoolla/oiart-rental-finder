@@ -9,7 +9,7 @@
 | OpenStreetMap tiles | Map requests reveal the viewed map area to the tile provider |
 | Leaflet / existing font and icon CDNs | Existing client libraries, icons and fonts |
 | Listing image hosts | Browser loads only available image URLs; hosts receive normal image requests |
-| Marketplace MCP | Local read-only search/details through the selected server's upstream; not part of the hosted app |
+| Secondhand MCP | Local read-only Facebook public search and listing details; Facebook only enabled, no credentials or paid proxy configured by this project; not part of the hosted app |
 | Playwright MCP | Local browser automation with a separate ignored login profile |
 
 This is a friends' tool, but an unlisted GitHub Pages URL is not authentication.

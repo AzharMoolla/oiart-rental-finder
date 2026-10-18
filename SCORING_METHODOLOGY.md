@@ -89,7 +89,11 @@ not automatic natural-language rules. Add factual details and review them.
 Status, contact, viewings, notes, and Archived are shared Sheet workflow fields;
 none should change the physical facts of a property. Trash means archive, not
 permanent deletion. Missing/broken links or images do not prove a place is dead.
-Delete only with dated off-market evidence older than 30 days and a backup.
+For off-market cleanup, use dated evidence older than 30 days and a backup.
+The user additionally authorized removing entries added more than three calendar
+months ago; the October 18, 2026 pass used a July 18 cutoff. Preserve reliable
+added dates, and back up before an age-based purge. Age is not proof of a listing's
+actual market status. No unattended deletion schedule was enabled.
 
 ## Regression Checks
 
