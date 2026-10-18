@@ -5,3 +5,10 @@ _serve.mjs
 # OS noise
 Thumbs.db
 .DS_Store
+
+# Agent tools and browser sessions stay on this computer.
+.local-tools/
+node_modules/
+.playwright-mcp/
+test-results/
+.codex/config.toml

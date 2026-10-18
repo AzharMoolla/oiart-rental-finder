@@ -10,7 +10,7 @@
    ========================================================================== */
 const SHEET_ID = "1ddciH2oqLcQxEePD-AEoO4GCqI8XztRcC1YTMJxZm9s";
 const SHEET_TAB_CANDIDATES = {
-  listings: ["Listings", "listings"],
+  listings: ["Listings"],
   sites: ["Sites", "sites"]
 };
 
@@ -55,7 +55,7 @@ function activePoi(){
 }
 function poiName(p, i){ return asText(p && p.name) || `Place ${i + 1}`; }
 function budgetFor(market){ return budgetForMarket(market); }
-function fmtMoney(n){ return n >= 10000 ? "$" + Math.round(n / 1000) + "k" : "$" + Number(n).toLocaleString(); }
+function fmtMoney(n){ return !Number.isFinite(n) ? "Budget not set" : n >= 10000 ? "$" + Math.round(n / 1000) + "k" : "$" + Number(n).toLocaleString(); }
 function haversineKm(aLat, aLon, bLat, bLon){
   const R = 6371, toR = x => x * Math.PI / 180;
   const dLat = toR(bLat - aLat), dLon = toR(bLon - aLon);
@@ -66,8 +66,8 @@ function haversineKm(aLat, aLon, bLat, bLon){
 const WORKFLOW_COLUMNS = [
   "Status","Contacted","LastContacted","Response","ViewingBooked","ViewingDate",
   "Decision","RemoveReason","FriendNotes","ParkingConfirmed","InternetConfirmed",
-  "AddressConfirmed","JulyConfirmed","ScamRisk","UpdatedAt","UpdatedBy",
-  "CanonicalKey","DuplicateOf"
+  "AddressConfirmed","JulyConfirmed","TimingConfirmed","ScamRisk","UpdatedAt","UpdatedBy",
+  "CanonicalKey","DuplicateOf","OffMarketSince"
 ];
 const IMAGE_COLUMNS = [
   "ImageURL","ImageAlt","ImageSource","ImageChecked"
@@ -75,9 +75,9 @@ const IMAGE_COLUMNS = [
 const WRITABLE_FIELDS = [
   "Archived","Status","Contacted","LastContacted","Response","ViewingBooked",
   "ViewingDate","Decision","RemoveReason","FriendNotes","ParkingConfirmed",
-  "InternetConfirmed","AddressConfirmed","JulyConfirmed","ScamRisk",
+  "InternetConfirmed","AddressConfirmed","JulyConfirmed","TimingConfirmed","ScamRisk",
   "UpdatedAt","UpdatedBy","ListingKind","DuplicateOf","CanonicalKey",
-  "ImageURL","ImageAlt","ImageSource","ImageChecked"
+  "ImageURL","ImageAlt","ImageSource","ImageChecked","OffMarketSince"
 ];
 
 /* Option B fallback (only if you ever hit a CORS edge case with gviz above):
@@ -89,6 +89,10 @@ const WRITABLE_FIELDS = [
 */
 
 let rows = [];
+let allRows = [];
+let loadVersion = 0;
+let writePending = 0;
+const pendingIds = new Set();
 let sites = [];
 let neighbourhoods = [];
 let sources = [];
@@ -118,6 +122,7 @@ function linkButton(url, label, cls="", missing="No link entered"){
     : `<span class="linkbtn disabled" title="${safe(missing)}">${safe(missing)}</span>`;
 }
 function listingImageUrl(r){ return safeUrl(r.ImageURL || r["Image URL"] || r.Image); }
+function rentLabel(r){return asText(r["Rent text"]) || (Number.isFinite(r.RentNum) ? fmtMoney(r.RentNum)+(r.MarketType==="sale"?"":" / month") : "Price not entered");}
 function imageAlt(r){ return textOr(r.ImageAlt, textOr(r["Listing / lead"], "Rental listing image")); }
 function imageThumb(r){
   const url = listingImageUrl(r);
@@ -146,7 +151,7 @@ function computeRanks(){
   const groups = { active: [], archived: [] };
   rows.forEach(r => (isArchived(r) ? groups.archived : groups.active).push(r));
   Object.values(groups).forEach(list => {
-    list.sort((a, b) => num(a.PriorityNum, 1e9) - num(b.PriorityNum, 1e9));
+    list.sort((a, b) => b.ScoreNum-a.ScoreNum || num(a.PriorityNum, 1e9)-num(b.PriorityNum, 1e9));
     list.forEach((r, i) => { r.RankDisplay = i + 1; });
   });
 }
@@ -158,7 +163,7 @@ function tableRow(r){
   const id = safe(r.ID);
   const sel = String(selectedListingId) === String(r.ID) ? "selectedrow" : "";
   const lvl = scoreLevelClass(r);
-  const driveTxt = asText(r["Est drive min"]) ? `${safe(r["Est drive min"])} min` : (Number.isFinite(r.KmNearest) ? `${r.KmNearest.toFixed(1)} km` : "—");
+  const driveTxt = Number.isFinite(r.DriveNum) ? `${safe(r["Est drive min"])} min` : (Number.isFinite(r.KmNearest) ? `${r.KmNearest.toFixed(1)} km` : "—");
   const kmTxt = Number.isFinite(r.KmNearest) && asText(r["Est drive min"]) ? `${r.KmNearest.toFixed(1)} km → ${safe(r.NearestPoiName)}` : (asText(r["Km straight-line"]) ? `${safe(r["Km straight-line"])} km` : "");
   const dup = asText(r.DuplicateOf) ? `<span class="pill warnpill" title="Duplicate of ${safe(r.DuplicateOf)}">dup ${safe(r.DuplicateOf)}</span>` : "";
   const scoreFlag = lvl ? `<span class="scoreflag ${lvl}" title="A must-have criterion is unconfirmed — expand for details">⚠</span>` : "";
@@ -187,7 +192,7 @@ function tableRow(r){
     <td><b class="rank" title="${safe(rankTitle(r))}">${safe(rankLabel(r))}</b>${r.NeedsId?'<br><span class="meta">Needs ID</span>':''}</td>
     <td><div class="listingcell">${tableThumb(r)}<div class="listinginfo"><b class="listingtitle">${safe(textOr(r["Listing / lead"], "Untitled listing"))}</b><div class="meta">${safe(textOr(r.Neighbourhood))}${asText(r.Type)?` · ${safe(r.Type)}`:""}</div><div class="kindline">${r.MarketType==="sale"?'<span class="pill salepill">For sale</span>':''}<span class="pill kindpill ${kindClass(r)}">${safe(r.ListingKind)}</span>${r.IsNew?'<span class="pill newpill">★ new</span>':''}${dup}</div></div></div></td>
     <td><span class="pill ${pillClass(r)}">${volLabel(r)}</span></td>
-    <td><b>${safe(textOr(r["Rent text"], "—"))}</b>${asText(r["Approx monthly share"])?`<br><span class="meta">share ${safe(r["Approx monthly share"])}</span>`:""}</td>
+    <td><b>${safe(rentLabel(r))}</b>${asText(r["Rent text"]) && asText(r["Approx monthly share"])?`<br><span class="meta">share ${safe(r["Approx monthly share"])}</span>`:""}</td>
     <td>${driveTxt}${kmTxt?`<br><span class="meta">${kmTxt}</span>`:""}</td>
     <td><b class="scoreval ${lvl}">${safe(r.ScoreNum)}</b>${scoreFlag}</td>
     <td><span class="statustext">${safe(textOr(r.Status || r.Action, "—"))}</span></td>
@@ -204,7 +209,8 @@ function routeLinkTo(r, poi){
   const hasLL = Number.isFinite(num(r.LatNum,NaN)) && Number.isFinite(num(r.LonNum,NaN));
   const origin = hasLL ? `${r.LatNum},${r.LonNum}` : compact([r["Address / locator"], r.Neighbourhood]);
   if(!origin) return "";
-  return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(poi.lat + "," + poi.lon)}`;
+  const mode={car:"driving",transit:"transit",active:"walking",mixed:"driving"}[activeProfile().transport] || "driving";
+  return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(poi.lat + "," + poi.lon)}&travelmode=${mode}`;
 }
 function routeLink(r){ return routeLinkTo(r, activePoi()); }
 function routeLinksHtml(r){
@@ -220,7 +226,9 @@ function csvEscape(v){
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 function sheetUrl(tabName){
-  return `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&headers=1&sheet=${encodeURIComponent(tabName)}`;
+  const ids = {Listings:280478168, "OIART BASED LISTINGS":280478168, Sites:262262253};
+  const selector = Object.hasOwn(ids, tabName) ? `gid=${ids[tabName]}` : `sheet=${encodeURIComponent(tabName)}`;
+  return `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&headers=1&${selector}`;
 }
 
 function parseCsv(text){
@@ -252,6 +260,7 @@ function parseCsv(text){
 function parseGviz(text){
   const json = text.slice(text.indexOf("(") + 1, text.lastIndexOf(")"));
   const data = JSON.parse(json);
+  if(data.status === "error" || !data.table) throw new Error(data.errors?.[0]?.detailed_message || "Invalid Sheet response");
   const cols = data.table.cols.map(c => ({ label: String(c.label || c.id || "").trim(), type: c.type }));
   return data.table.rows.map((tr, index) => {
     const o = {};
@@ -340,7 +349,7 @@ function computeScore(r){
       note = `drive ~${d} min vs ${maxMin} min limit`;
     }
     if(pts == null) return {na:true, note:"No distance known — set My places, or add coords / drive time"};
-    const overLimit = (Number.isFinite(d) && d > maxMin * 1.35) || (Number.isFinite(km) && km > maxKm * 1.35);
+    const overLimit = (Number.isFinite(d) && d > maxMin) || (Number.isFinite(km) && km > maxKm);
     if(overLimit && hasDealBreaker("longCommute")) hardCaps.push("commute beyond your limit");
     return {pts, level: pts <= 12 ? "warn" : "ok", note};
   })());
@@ -352,8 +361,11 @@ function computeScore(r){
     const v = r.RentNum;
     if(!Number.isFinite(v)) return {na:true, note:"Price not stated"};
     const b = budgetFor(market), firm = budgetIsFirm();
-    const allIn = market !== "sale" && (r.HasInternet || /all|incl/i.test(asText(r["Internet / utilities"])));
-    const ratio = v / b;
+    if(!Number.isFinite(b)) return {na:true, note:"Set a budget in your profile"};
+    const allIn = market !== "sale" && ListingRules.internet(r).allIn;
+    const ideal = market === "rent" ? parseNum(activeProfile().budgetIdeal) : NaN;
+    const target = Number.isFinite(ideal) && ideal > 0 ? Math.min(ideal,b) : b;
+    const ratio = v / target;
     let pts;
     if(ratio <= 0.9) pts = allIn ? 20 : 18;
     else if(ratio <= 1.0) pts = allIn ? 19 : 16;
@@ -362,20 +374,20 @@ function computeScore(r){
     else if(ratio <= 1.5) pts = firm ? 4 : 8;
     else if(ratio <= 1.8) pts = firm ? 2 : 5;
     else pts = firm ? 1 : 3;
-    if(ratio > 1.02 && hasDealBreaker("overBudget")) hardCaps.push("over your budget");
+    if(v > b && hasDealBreaker("overBudget")) hardCaps.push("over your budget");
     return {pts, level: ratio > (firm ? 1.0 : 1.5) ? "warn" : "ok",
-      note: `${Math.round(ratio * 100)}% of ${fmtMoney(b)} target${firm ? " (hard ceiling)" : ""}`};
+      note: `${Math.round(ratio * 100)}% of ${fmtMoney(target)} preferred / ${fmtMoney(b)} maximum${firm ? " (hard ceiling)" : ""}`};
   })());
 
   // Parking
   push("parking", "Parking", (function(){
-    const t = asText(r.Parking).toLowerCase();
-    if(truthy(r.ParkingConfirmed) || r.HasParking) return {pts:10, note:"parking available"};
-    if(/no parking|street only|no spot|no on-?site|unavailable|not included/.test(t)){
+    const evidence = ListingRules.parking(r);
+    if(evidence.state === "no"){
       if(hasDealBreaker("noParking")) hardCaps.push("no parking");
       return {pts:0, level:"bad", note:"No parking"};
     }
-    if(/extra|paid|\$|fee/.test(t)) return {pts:7, level:"warn", note:"paid parking"};
+    if(evidence.state === "paid") return {pts:7, level:"warn", note:"paid parking"};
+    if(evidence.state === "yes") return {pts:10, note:"parking available"};
     return {na:true, note:"Parking not confirmed"};
   })());
 
@@ -384,10 +396,8 @@ function computeScore(r){
   // renormalization absorbs it; no fake "confirm internet" flags on houses).
   if(market !== "sale"){
     push("internet", "Internet / utilities", (function(){
-      const t = asText(r["Internet / utilities"]).toLowerCase();
-      if(truthy(r.InternetConfirmed) || r.HasInternet || /all|incl/.test(t)) return {pts:5, note:"included"};
-      if(/partial|some|hydro/.test(t)) return {pts:3, level:"warn", note:"partial"};
-      if(/no internet|not included|extra/.test(t)) return {pts:2, level:"warn", note:"internet extra"};
+      const evidence = ListingRules.internet(r);
+      if(evidence.state !== "unknown") return {pts:evidence.pts, level:evidence.pts < 5 ? "warn" : "ok", note:evidence.state};
       return {na:true, note:"Internet / utilities not confirmed"};
     })());
   }
@@ -406,28 +416,26 @@ function computeScore(r){
       if(/condo|apartment|loft|strata/.test(t)) return {pts:11, note:"condo / apartment (check fees)"};
       return {pts:9, note:"type unclear"};
     }
-    if(/shared bedroom|shared room/.test(t)){
+    const evidence = ListingRules.privacy(r);
+    if(evidence.state === "unknown") return {na:true, note:"Home type not stated"};
+    if(evidence.state === "shared"){
       if(hasDealBreaker("sharedBedroom")) hardCaps.push("shared bedroom");
       return {pts:5, level:"bad", note:"Shared bedroom"};
     }
-    const whole = /basement|studio|bachelor|1-?bed|one bed|two bed|2-?bed|apartment|house(?!hold)|condo|town(house|home)|duplex|ensuite|en-suite|own bath|private bath|separate entrance/.test(t);
-    if(whole) return {pts:15, note:"private unit / own bath"};
+    if(evidence.state === "unit") return {pts:15, note:"private unit / own bath"};
     // A room in a shared house is a poor fit for couples and families.
-    if(/private (room|bed)/.test(t)) return wantsWhole ? {pts:7, level:"warn", note:"room only — you wanted a whole place"} : {pts:12, note:"private room"};
-    if(/room/.test(t)) return wantsWhole ? {pts:6, level:"warn", note:"room only — you wanted a whole place"} : {pts:11, note:"room in shared house"};
+    if(evidence.state === "privateRoom") return wantsWhole ? {pts:7, level:"warn", note:"room only — you wanted a whole place"} : {pts:12, note:"private room"};
+    if(evidence.state === "room") return wantsWhole ? {pts:6, level:"warn", note:"room only — you wanted a whole place"} : {pts:11, note:"room in shared house"};
     return {pts:8, note:"type unclear"};
   })());
 
   // Timing /10 — market-aware, graduated on what's actually stated.
   // rent: move-in timing; sale: possession/closing (tenanted = real gotcha).
   push("lease", market === "sale" ? "Possession / closing" : "Move-in timing", (function(){
-    if(truthy(r.JulyConfirmed)) return {pts:10, note:"timing confirmed"};
-    const t = compact([r.Availability, r["What to verify"]]).toLowerCase();
+    const t = ListingRules.stated(r.Availability).toLowerCase();
     const want = asText(activeProfile().timing).toLowerCase();
     // If the profile names a target month and the listing states it, that's a
     // direct hit — the strongest timing signal we can get.
-    const wantMonth = (want.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*/) || [])[0];
-    if(wantMonth && t.includes(wantMonth)) return {pts:10, note:`matches your target (${wantMonth})`};
     if(market === "sale"){
       if(/vacant|immediate|quick clos|flexible/.test(t)) return {pts:10, note:"vacant / flexible possession"};
       if(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b|\d{2,4}[-/]\d{1,2}/.test(t)) return {pts:9, note:"possession date stated"};
@@ -437,10 +445,9 @@ function computeScore(r){
       }
       return {na:true, note:"Possession not stated — confirm"};
     }
-    if(/12[\s-]*month|year lease|12\s*mo/.test(t)) return {pts:10, note:"12-month lease"};
-    if(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/.test(t)) return {pts:9, note:"move-in month stated"};
-    if(/flexible|negotiable|any ?time/.test(t)) return {pts:8, note:"flexible start"};
-    if(/now|immediate|available now|asap|vacant/.test(t)) return {pts:8, note:"available now"};
+    const evidence = ListingRules.timing(r, want);
+    if(evidence.state === "mismatch") return {pts:4, level:"bad", note:"Different move-in month / year"};
+    if(evidence.state !== "unknown") return {pts:evidence.pts, note:evidence.state};
     return {na:true, note:"Timing not stated — confirm"};
   })());
 
@@ -510,6 +517,8 @@ function scoreBreakdown(r){
 function scoreFlags(r){
   const comps = r.ScoreComponents || [];
   const chips = [];
+  (r.RequirementUnknown || []).forEach(key=>chips.push(`<span class="flagchip na">Confirm ${safe(key.replace(/([A-Z])/g," $1").toLowerCase())}</span>`));
+  (r.RequirementFailures || []).forEach(key=>chips.push(`<span class="flagchip bad">Outside brief: ${safe(key.replace(/([A-Z])/g," $1").toLowerCase())}</span>`));
   (r.ScoreHardCaps || []).forEach(h => chips.push(`<span class="flagchip breaker" title="You marked this a deal-breaker — score hard-capped">✕ ${safe(h)}</span>`));
   comps.forEach(c => {
     if(c.na) chips.push(`<span class="flagchip na" title="Not stated in the listing yet — contact to confirm">Confirm ${safe(SCORE_SHORT[c.key] || c.label)}</span>`);
@@ -573,17 +582,20 @@ document.addEventListener("mouseout", e => {
 
 // Recompute the helper fields the UI relies on (the CSV/Sheet does NOT contain them).
 function deriveListing(o){
-  const originalId = asText(o.ID);
+  const originalId = o.NeedsId ? "" : asText(o.ID);
   o.NeedsId = !originalId;
-  o.ID = originalId || `sheet-row-${o._RowNumber || Math.random().toString(36).slice(2)}`;
+  o.ID = originalId || o.ID || `sheet-row-${o._RowNumber || Math.random().toString(36).slice(2)}`;
   o.DisplayID = originalId || `row ${o._RowNumber || "without ID"}`;
   const rent  = parseNum(o["Approx monthly share"]);
-  const drive = parseNum(o["Est drive min"]);
   const park  = String(o["Parking"] || "");
   const net   = String(o["Internet / utilities"] || "");
   [...WORKFLOW_COLUMNS, ...IMAGE_COLUMNS].forEach(k => { if(o[k] == null) o[k] = ""; });
   o.PriorityNum = parseNum(o["Priority"]);
-  o.DriveNum    = parseNum(o["Est drive min"]);
+  o.DriveNum    = ListingRules.driveMinutes(o["Est drive min"]);
+  // Historical London drive estimates must not be applied to another campus.
+  const driveTarget = asText(o.CommuteSearchID) || ListingRules.searchId(o);
+  if(activeProfile().searchId && driveTarget && driveTarget !== activeProfile().searchId) o.DriveNum = NaN;
+  if(activeProfile().transport !== "car" && getPois().length) o.DriveNum = NaN;
   o.RentNum     = parseNum(o["Approx monthly share"]);
   o.LatNum      = parseNum(o["Latitude"]);
   o.LonNum      = parseNum(o["Longitude"]);
@@ -608,9 +620,10 @@ function deriveListing(o){
     o.KmNearest = NaN; o.KmWeighted = NaN; o.NearestPoiName = ""; o.PoiKmText = "";
   }
   o.UnderTarget = Number.isFinite(rent) && rent <= budgetFor(o.MarketType);
-  o.EasyCommute = (Number.isFinite(drive) && drive <= 15) || (Number.isFinite(o.KmWeighted) && o.KmWeighted <= 7);
-  o.HasParking  = /yes|incl|avail|spot|driveway|assigned|surface|garage|outdoor/i.test(park) && !/no parking/i.test(park);
-  o.HasInternet = /yes|incl|all|wifi|gigabit|1gb/i.test(net);
+  o.EasyCommute = (Number.isFinite(o.DriveNum) && o.DriveNum <= maxCommuteMin()) || (Number.isFinite(o.KmWeighted) && o.KmWeighted <= maxRadiusKm());
+  o.HasParking  = ["yes","paid"].includes(ListingRules.parking(o).state);
+  o.HasInternet = ListingRules.internet(o).includedNet === true;
+  o.CanonicalKey = asText(o.CanonicalKey) || ListingRules.canonicalKey(o.URL);
   o.ListingKind = listingKind(o);
   o.IsNew       = String(o["IsNew"]).trim().toUpperCase() === "TRUE";
   o.Archived    = String(o["Archived"]).trim().toUpperCase() === "TRUE";
@@ -623,15 +636,14 @@ function deriveListing(o){
   const toVerify = asText(o["What to verify"]).toLowerCase();
   const addrText = asText(o["Address / locator"]).toLowerCase();
   const availText = asText(o.Availability).toLowerCase();
-  o.ContactedBool = truthy(o.Contacted) || /contacted|messaged|emailed|called|sent/i.test(status);
+  o.ContactedBool = truthy(o.Contacted) || (!/not contacted|uncontacted/i.test(status) && /\bcontacted\b|messaged|emailed|called|\bsent\b/i.test(status));
   o.WaitingReply = /waiting|pending|sent|messaged|emailed|follow/i.test(compact([status, response])) && !/booked|declined|rejected|dead|remove/i.test(compact([status, response]));
   o.ViewingBookedBool = truthy(o.ViewingBooked) || !!asText(o.ViewingDate) || /viewing|tour|showing|booked/i.test(status);
   o.GoodOption = /good|strong|shortlist|keeper|yes|priority|message first|book viewing/i.test(decision) && !/no|bad|dead|remove|scam/i.test(decision);
   o.NeedsParking  = !truthy(o.ParkingConfirmed)  && (!o.HasParking  || /park/.test(toVerify));
   o.NeedsInternet = o.MarketType !== "sale" && !truthy(o.InternetConfirmed) && (!o.HasInternet || /internet|wifi|util|hydro/.test(toVerify));
   o.NeedsAddress  = !truthy(o.AddressConfirmed)  && (!addrText || /area only|approx|unknown/.test(addrText) || /address|intersection|exact location/.test(toVerify));
-  // timing (move-in / possession) — kept on the JulyConfirmed sheet column for back-compat
-  o.NeedsJuly     = !truthy(o.JulyConfirmed)     && (availText === "" || /unknown|verify|tbd|ask|\?/.test(availText) || /lease start|move-?in|timing|possession|closing|term/.test(toVerify));
+  o.NeedsJuly = ListingRules.timing(o, activeProfile().timing).state === "unknown";
   // Live computed score (manual ScoreOverride wins; sheet Score kept for compare)
   const auto = computeScore(o);
   const override = parseNum(o.ScoreOverride);
@@ -648,7 +660,81 @@ function deriveListing(o){
   o.ScoreTotalMax    = auto.totalMax;
   o.ScoreComputed    = !Number.isFinite(override);
   o.ScoreNum         = Number.isFinite(override) ? override : auto.total;
+  const checks = profileRequirements(o);
+  o.RequirementUnknown = checks.unknown;
+  o.RequirementFailures = checks.failed;
+  if(o.ScoreComputed){
+    const missing=new Set([...auto.criticalUnknown,...checks.unknown]);
+    o.ScoreCap=Math.min(o.ScoreCap,missing.size>=3?59:missing.size===2?69:missing.size===1?79:100);
+    if(checks.failed.length)o.ScoreCap=Math.min(o.ScoreCap,45);
+    o.ScoreNum=Math.min(o.ScoreNum,o.ScoreCap);
+    o.ScoreAuto=o.ScoreNum;
+  }
+  o.ScoreCritUnknown = [...new Set([...auto.criticalUnknown,...checks.unknown])];
+  o.ScoreHardCaps = [...new Set([...auto.hardCaps,...checks.failed])];
+  o.FitCategory = checks.failed.length || auto.hardCaps.length || o.ScoreNum < 65 ? "outside" :
+    isTuned() && !activeProfile().briefPending && o.ScoreNum >= 80 && !auto.criticalUnknown.length && !checks.unknown.length ? "core" : "stretch";
   return o;
+}
+
+function profileRequirements(r){
+  const p = activeProfile(), unknown=[], failed=[];
+  const facts = compact([ListingRules.stated(r.Type), ListingRules.stated(r["Criteria fit"]),ListingRules.stated(r.Laundry),ListingRules.stated(r.PetsAllowed)]).toLowerCase();
+  const knownBool=value=>truthy(value)?true:/^(false|no|not allowed)$/i.test(asText(value))?false:null;
+  const evidence = {
+    parking: ListingRules.parking(r).state === "no" ? false : r.HasParking ? true : null,
+    internet: /no internet|no wi-?fi|internet unavailable/i.test(asText(r["Internet / utilities"])) ? false : ListingRules.internet(r).state === "unknown" ? null : truthy(r.InternetConfirmed) || r.HasInternet || /\bwi-?fi\b|\binternet\b/i.test(asText(r["Internet / utilities"])) ? true : null,
+    privateBedroom: ListingRules.privacy(r).state === "shared" ? false : ["unit","privateRoom"].includes(ListingRules.privacy(r).state) ? true : null,
+    privateBath: /shared (bath|washroom)/.test(facts) ? false : /ensuite|en-suite|own bath|private bath/.test(facts) ? true : null,
+    separateEntrance: /separate entrance|private entrance/.test(facts) ? true : null,
+    laundry: /no laundry|off[- ]site laundry/.test(facts) ? false : /laundry|washer/.test(facts) ? true : null,
+    pets: knownBool(r.PetsAllowed) ?? (/no pets|not pet friendly/.test(facts) ? false : /pet[- ]friendly|pets allowed/.test(facts) ? true : null),
+    furnished: /unfurnished/i.test(asText(r.Furnishing)) ? false : /^furnished|fully furnished/i.test(asText(r.Furnishing)) ? true : null,
+    outdoor: /backyard|outdoor|garden|balcony|patio/.test(facts) ? true : null
+  };
+  (p.mustHaves || []).forEach(key => {
+    if(evidence[key] === false) failed.push(key);
+    else if(evidence[key] !== true) unknown.push(key);
+  });
+  if(p.answers.paidParking==="no" && ListingRules.parking(r).state==="paid")failed.push("paid parking");
+  if(p.answers.bills==="included"){
+    if(ListingRules.internet(r).allIn!==true){
+      if(/extra|shared|additional/i.test(asText(r["Internet / utilities"])))failed.push("utilities extra");
+      else unknown.push("included bills");
+    }
+  }
+  if(p.timing && p.answers.temporary!=="yes"){
+    const timing=ListingRules.timing(r,p.timing);
+    if(timing.state==="mismatch")failed.push("move-in timing");
+    else if(timing.state==="unknown")unknown.push("move-in timing");
+  }
+  const roommates=parseNum(r.Roommates);
+  if(p.maxRoommates!=null){
+    if(!Number.isFinite(roommates))unknown.push("roommate count");
+    else if(roommates>p.maxRoommates)failed.push("too many roommates");
+  }
+  if(p.answers.parkingNeed==="yes" && Number(p.answers.parkingSpaces)>1){
+    const spaces=parseNum(r.ParkingSpaces);
+    if(!Number.isFinite(spaces))unknown.push("parking space count");
+    else if(spaces<Number(p.answers.parkingSpaces))failed.push("not enough parking spaces");
+  }
+  if(p.answers.sharedLaundry==="no"){
+    if(/shared|communal|in building|on.site/i.test(asText(r.Laundry)))failed.push("shared laundry");
+    else if(!/in.unit|private/i.test(asText(r.Laundry)))unknown.push("private laundry");
+  }
+  if(p.answers.access){
+    const accessible=knownBool(r.Accessible);
+    if(accessible===false)failed.push("accessibility");else if(accessible!==true)unknown.push("accessibility");
+  }
+  if(p.answers.housingTypes?.length){
+    const types=p.answers.housingTypes;
+    const type=asText(r.Type).toLowerCase();
+    const isRoom=/\broom\b/.test(type) && !/\b[1-3][- ]bedroom apartment/.test(type);
+    const isSplit=/split|[2-9][- ]bed/.test(type);
+    const match=(types.includes("room") && isRoom) || (types.includes("whole") && !isRoom && !!type) || (types.includes("split") && isSplit);
+    if(type && !match) failed.push("housing type");
+  }
+  return {unknown,failed};
 }
 
 // The sites tab uses verbose headers; alias them onto the keys the panel expects.
@@ -663,13 +749,14 @@ async function loadSheet(url, kind){
   const res = await fetch(url, { cache: "no-store" });
   if(!res.ok) throw new Error("HTTP " + res.status);
   const list = parseGviz(await res.text());
+  if(list.length && !(kind === "sites" ? ("Site" in list[0] || "Category" in list[0]) : "ID" in list[0] && "Listing / lead" in list[0])) throw new Error("Unexpected Sheet headers");
   return kind === "sites" ? list.map(deriveSite) : list.map(deriveListing);
 }
 
 async function loadSheetWithTabs(kind){
   // The active profile can name its own tab (e.g. "WATERLOO LISTINGS"), so one
   // workbook can hold several searches. Falls back to the generic candidates.
-  const chosen = (typeof profileSheetTab === "function") ? profileSheetTab(kind) : "";
+  const chosen = "";
   const tabs = chosen ? [chosen, ...(SHEET_TAB_CANDIDATES[kind] || [])] : (SHEET_TAB_CANDIDATES[kind] || [kind]);
   let lastErr;
   for(const tab of tabs){
@@ -688,9 +775,9 @@ function isArchived(r){ return r.Archived === true || archived.has(r.ID); }
 const el = id => document.getElementById(id);
 function safe(s){return String(s ?? "").replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function num(v,f=0){const n=Number(v);return Number.isFinite(n)?n:f;}
-function volClass(r){return String(r.Volume).includes("Vol 1")?"vol1":String(r.Volume).includes("Vol 2")?"vol2":"unknownvol";}
-function pillClass(r){return String(r.Volume).includes("Vol 1")?"core":String(r.Volume).includes("Vol 2")?"stretch":"unknownpill";}
-function volLabel(r){return String(r.Volume).includes("Vol 1")?"Vol 1 core":String(r.Volume).includes("Vol 2")?"Vol 2 stretch":"Volume not set";}
+function volClass(r){return r.FitCategory === "core" ? "vol1" : r.FitCategory === "stretch" ? "vol2" : "outsidevol";}
+function pillClass(r){return r.FitCategory === "core" ? "core" : r.FitCategory === "stretch" ? "stretch" : "outsidepill";}
+function volLabel(r){return r.FitCategory === "core" ? "Core fit" : r.FitCategory === "stretch" ? "Stretch / verify" : "Outside parameters";}
 function listingKind(r){
   const manual = asText(r.ListingKind || r["Listing kind"] || r["Listing type"]);
   if(manual) return manual;
@@ -727,21 +814,23 @@ const state={
   under1000:false,parking:false,internet:false,newonly:false,
   notContacted:false,waitingReply:false,viewingBooked:false,goodOption:false,
   needsParking:false,needsInternet:false,needsAddress:false,needsJuly:false,
-  sortKey:"PriorityNum",sortDir:1,view:"active",showUnmapped:false
+  sortKey:"ScoreNum",sortDir:-1,view:"active",showUnmapped:false
 };
 let archived = new Set();
-try{ const saved=localStorage.getItem("oiart_archived"); if(saved) archived=new Set(JSON.parse(saved)); }catch(e){}
-function persist(){ try{ localStorage.setItem("oiart_archived", JSON.stringify([...archived])); }catch(e){} }
+try{ if(!WRITE_URL){const saved=sessionStorage.getItem("hf_session_archived");if(saved)archived=new Set(JSON.parse(saved));} }catch(e){}
+function persist(){try{if(!WRITE_URL)sessionStorage.setItem("hf_session_archived",JSON.stringify([...archived]));}catch(e){}}
 
 // KPIs
 function renderKPIs(){
-  const v1=rows.filter(r=>String(r.Volume).includes("Vol 1")).length;
-  const v2=rows.filter(r=>String(r.Volume).includes("Vol 2")).length;
+  const visible=rows.filter(r=>!isArchived(r));
+  const v1=visible.filter(r=>r.FitCategory === "core").length;
+  const v2=visible.filter(r=>r.FitCategory === "stretch").length;
   const nw=rows.filter(r=>r.IsNew).length;
   const under=rows.filter(r=>r.UnderTarget).length;
   const easy=rows.filter(r=>r.EasyCommute).length;
-  const kpis=[["green",rows.length,"Total listings"],["green",v1,"Vol 1 core fits"],["blue",v2,"Vol 2 stretch"],
-    ["gold",nw,"New this round"],["green",under,"Within budget"],["green",easy,"Easy commute"]];
+  const outside=visible.filter(r=>r.FitCategory === "outside").length;
+  const kpis=[["green",visible.length,"Active listings"],["green",v1,"Core fits"],["blue",v2,"Stretch / verify"],
+    ["gold",outside,"Outside parameters"],["green",visible.filter(r=>r.UnderTarget).length,"Within budget"],["green",visible.filter(r=>r.EasyCommute).length,"Within commute"]];
   el("kpis").innerHTML=kpis.map(k=>`<div class="kpi ${k[0]}"><div class="num">${k[1]}</div><div class="label">${k[2]}</div></div>`).join("");
 }
 
@@ -756,7 +845,7 @@ function updateCounts(){
 }
 
 // Reset to just the "All" option, then repopulate from the live data.
-function populateSelect(id,vals){const s=el(id);s.length=1;vals.forEach(v=>{const o=document.createElement("option");o.value=v;o.textContent=v;s.appendChild(o);});}
+function populateSelect(id,vals){const s=el(id),previous=s.value;s.length=1;vals.forEach(v=>{const o=document.createElement("option");o.value=v;o.textContent=v;s.appendChild(o);});if(vals.includes(previous))s.value=previous;}
 function populateFilters(){
   neighbourhoods=uniqSorted(rows.map(r=>r.Neighbourhood));
   sources=uniqSorted(rows.map(r=>r.Source));
@@ -768,7 +857,7 @@ const hasMap = (typeof L !== "undefined");
 let map=null;
 if(hasMap){
   map=L.map("map",{scrollWheelZoom:true}).setView([45,-85],4); // neutral start; fits to data + places on load
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",{subdomains:"abcd",maxZoom:20,attribution:'&copy; OpenStreetMap &copy; CARTO'}).addTo(map);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(map);
 } else {
   const md=document.getElementById("map");
   if(md) md.innerHTML='<div style="padding:24px;font-family:Inter;color:#766b5e">Map library couldn\'t load (offline or blocked). The ranked list, table and filters below all still work. Open in a normal browser with internet to see the map.</div>';
@@ -819,7 +908,7 @@ function popup(r){
   ${popupImage(r)}
   <span class="pill ${pillClass(r)}">${volLabel(r)}</span><span class="pill scorepill ${scoreLevelClass(r)}" title="${safe(scoreBreakdown(r))}">Score ${safe(r.ScoreNum)}</span><span class="pill kindpill ${kindClass(r)}">${safe(r.ListingKind)}</span>${r.IsNew?'<span class="pill newpill">★ new</span>':''}<br>
   <b>Area:</b> ${safe(textOr(r.Neighbourhood))}<br><b>Locator:</b> ${safe(textOr(r["Address / locator"]))}<br>
-  <b>Type:</b> ${safe(textOr(r.Type))}<br><b>Rent:</b> ${safe(textOr(r["Rent text"]))}<br>
+  <b>Type:</b> ${safe(textOr(r.Type))}<br><b>Rent:</b> ${safe(rentLabel(r))}<br>
   <b>Drive:</b> ${safe(textOr(r["Est drive min"]))}${asText(r["Est drive min"])?" min":""}${r.PoiKmText?` · <b>Distance:</b> ${safe(r.PoiKmText)}`:""} · <b>Parking:</b> ${safe(textOr(r.Parking))}<br>
   <b>Internet/util:</b> ${safe(textOr(r["Internet / utilities"]))}<br>
   <p style="margin:6px 0"><b>Why:</b> ${safe(textOr(r["Why add / note"]))}</p>
@@ -831,8 +920,8 @@ function card(r){
   const selected = String(selectedListingId) === String(r.ID) ? " selectedcard" : "";
   const action = arch
     ? `<button class="restorebtn" data-restore="${safe(r.ID)}">↩ Restore</button>`
-    : r.NeedsId
-      ? `<button class="trash disabled" disabled title="Add an ID in the Sheet before archiving">🗑</button>`
+    : r.NeedsId || r.DuplicateID
+      ? `<button class="trash disabled" disabled title="A unique ID is required before archiving">🗑</button>`
       : `<button class="trash" data-trash="${safe(r.ID)}" title="Archive to the Sheet (hide from Active)">🗑</button>`;
   const seen = r["Date seen"] ? `seen ${safe(r["Date seen"])}` : "";
   const chk = r["Last checked"] ? ` · checked ${safe(r["Last checked"])}` : "";
@@ -842,9 +931,9 @@ function card(r){
     ["Response", r.Response],
     ["Viewing", r.ViewingDate || (r.ViewingBookedBool ? "booked" : "")]
   ].filter(x => asText(x[1]));
-  const rent = textOr(r["Rent text"]);
+  const rent = rentLabel(r);
   const near = Number.isFinite(r.KmNearest) ? `${r.KmNearest.toFixed(1)} km → ${safe(r.NearestPoiName)}` : "";
-  const drive = asText(r["Est drive min"]) ? `~${safe(r["Est drive min"])} min${near ? ` · ${near}` : ""}` : (near || "distance unknown");
+  const drive = Number.isFinite(r.DriveNum) ? `~${safe(r["Est drive min"])} min${near ? ` · ${near}` : ""}` : (near || "distance unknown");
   return `<div class="card${selected}" data-id="${safe(r.ID)}">
   <div class="cardhead"><div class="pills">${r.MarketType==="sale"?'<span class="pill salepill">For sale</span>':''}<span class="pill ${pillClass(r)}">${volLabel(r)}</span><span class="pill scorepill ${scoreLevelClass(r)}" title="${safe(rankTitle(r))}">#${safe(rankLabel(r))} · ${safe(r.ScoreNum)}${r.ScoreComputed && Number.isFinite(r.ScoreSheet) && r.ScoreSheet!==r.ScoreNum?` <span class="sheetcmp">(was ${safe(r.ScoreSheet)})</span>`:""}</span><span class="pill kindpill ${kindClass(r)}">${safe(r.ListingKind)}</span>${r.IsNew?'<span class="pill newpill">★ new</span>':''}${asText(r.DuplicateOf)?`<span class="pill warnpill" title="Marked as duplicate of ${safe(r.DuplicateOf)}">dup of ${safe(r.DuplicateOf)}</span>`:''}${r.NeedsId?'<span class="pill warnpill">Needs ID</span>':''}</div>${action}</div>
   <h3>${safe(textOr(r["Listing / lead"], "Untitled listing"))}</h3>
@@ -863,8 +952,8 @@ function card(r){
 function selected(value, option){ return asText(value) === option ? " selected" : ""; }
 function checked(value){ return truthy(value) ? " checked" : ""; }
 function workflowEditor(r){
-  const disabled = r.NeedsId ? " disabled" : "";
-  const idWarning = r.NeedsId ? `<div class="inlinewarn">Add an ID in the Sheet before saving changes for this row.</div>` : "";
+  const disabled = r.NeedsId || r.DuplicateID ? " disabled" : "";
+  const idWarning = r.NeedsId || r.DuplicateID ? `<div class="inlinewarn">${r.DuplicateID?"This ID is repeated. Give each listing a unique ID in the Sheet before saving.":"Add an ID in the Sheet before saving changes for this row."}</div>` : "";
   return `<details class="workflowedit" data-workflow-id="${safe(r.ID)}">
     <summary>Update status</summary>
     ${idWarning}
@@ -903,7 +992,7 @@ function workflowEditor(r){
       <label>Duplicate of (ID) <input data-field="DuplicateOf" type="text" placeholder="e.g. A4" value="${safe(r.DuplicateOf)}"></label>
       </div>
       <div class="workflowchecks">
-      ${["Contacted","ViewingBooked","ParkingConfirmed","InternetConfirmed","AddressConfirmed","JulyConfirmed"].map(f=>`<label><input data-field="${f}" type="checkbox"${checked(r[f])}> ${safe(f==="JulyConfirmed"?"Timing confirmed":f.replace(/([A-Z])/g," $1").trim())}</label>`).join("")}
+      ${["Contacted","ViewingBooked","ParkingConfirmed","InternetConfirmed","AddressConfirmed","TimingConfirmed"].map(f=>`<label><input data-field="${f}" type="checkbox"${checked(r[f])}> ${safe(f.replace(/([A-Z])/g," $1").trim())}</label>`).join("")}
       </div>
     </details>
   </details>`;
@@ -934,16 +1023,17 @@ function landlordMessage(r){
   const noun = isUnit ? "place" : "room";
   const ref = goodAddr ? `your listing at ${addr}` : nb ? `your ${nb} ${noun}` : "your rental listing";
   const avail = asText(r.Availability);
-  const timingKnown = truthy(r.JulyConfirmed) || !!avail;
-  const timing = timingKnown && avail ? `around ${avail}` : "in the coming weeks (I'm flexible on the exact date)";
-
-  const intro = `Hi! I'm interested in ${ref}. I'm looking for ${isUnit ? "a place" : "a private room"} on roughly a 12-month lease, ideally moving in ${timing}. I'm quiet, tidy, non-smoking, and happy to provide references.`;
+  const p=activeProfile();
+  const timingKnown = !!ListingRules.stated(avail);
+  const timing = p.timing ? `around ${p.timing}` : "in the coming weeks";
+  const lease = /^\d+$/.test(p.leaseMonths) ? ` on a ${p.leaseMonths}-month lease` : "";
+  const intro = `Hi! I'm interested in ${ref}. I'm looking for ${isUnit ? "a place" : "a private room"}${lease}, ideally moving in ${timing}.`;
 
   const qs = [];
   qs.push(timingKnown ? "is it still available?" : "is it still available, and what move-in dates work?");
   qs.push("the total monthly cost, including any utilities or fees?");
   if(r.NeedsInternet || !r.HasInternet) qs.push("whether internet is included (and roughly the speed)?");
-  if(r.NeedsParking || !r.HasParking) qs.push("whether a parking spot is available?");
+  if(p.mustHaves.includes("parking") && (r.NeedsParking || !r.HasParking)) qs.push("whether a parking spot is available?");
   if(r.NeedsAddress || !goodAddr) qs.push("the exact address or nearest major intersection?");
   if(!asText(r.Furnishing)) qs.push(`whether the ${noun} is furnished or unfurnished?`);
   if(!isUnit) qs.push("who else lives there, and how many people share the kitchen and bathroom?");
@@ -1027,15 +1117,26 @@ function updateSelection(id, focusMap=true){
 }
 
 async function saveWorkflow(id, fields){
+  if(pendingIds.has(id)) return;
   const existing = rows.find(x => String(x.ID) === String(id));
-  if(existing && existing.NeedsId){
-    toast("Add an ID in the Sheet before saving changes for this row.");
+  if(existing && (existing.NeedsId || existing.DuplicateID)){
+    toast("Give this listing a unique ID in the Sheet before saving changes.");
     return;
   }
   const clean = {};
   Object.keys(fields).forEach(k => {
     if(WRITABLE_FIELDS.includes(k)) clean[k] = fields[k];
   });
+  if(clean.Status === "Gone"){
+    clean.Archived="TRUE";
+    clean.OffMarketSince=asText(existing?.OffMarketSince) || new Date().toISOString().slice(0,10);
+  }
+  const before=existing ? {...existing} : null;
+  const wasLocalArchive=archived.has(id);
+  if(clean.Archived != null){
+    if(truthy(clean.Archived))archived.add(id);else archived.delete(id);
+    persist();
+  }
   applyLocalFields(id, clean);
   if(clean.Status === "Archived" || clean.Decision === "Archived") {
     archived.add(id);
@@ -1048,7 +1149,15 @@ async function saveWorkflow(id, fields){
     toast(`Updated ${id} in this browser only. Paste the Apps Script /exec URL into WRITE_URL to save to the Sheet.`);
     return;
   }
-  await writeFields(id, clean);
+  pendingIds.add(id);
+  try{
+    const saved=await writeFields(id,clean);
+    if(!saved && before){
+      Object.assign(existing,before);
+      if(wasLocalArchive)archived.add(id);else archived.delete(id);
+      persist();deriveListing(existing);render();
+    }
+  }finally{pendingIds.delete(id);}
 }
 function filtered(){
   const q=el("search").value.trim().toLowerCase();
@@ -1060,11 +1169,11 @@ function filtered(){
     if(state.view==="active" && isArch) return false;
     if(state.view==="archived" && !isArch) return false;
     if(q && !searchText(r).includes(q)) return false;
-    if(vol && !String(r.Volume).includes(vol)) return false;
+    if(vol && r.FitCategory !== vol) return false;
     if(mk && r.MarketType!==mk) return false;
     if(neigh && r.Neighbourhood!==neigh) return false;
     if(src && r.Source!==src) return false;
-    if(drive!==null && num(r.DriveNum,999)>drive) return false;
+    if(activeProfile().transport==="car" && drive!==null && num(r.DriveNum,999)>drive) return false;
     if(state.under1000 && !r.UnderTarget) return false;
     if(state.parking && !r.HasParking) return false;
     if(state.internet && !r.HasInternet) return false;
@@ -1116,14 +1225,11 @@ function bindLeadPanelActions(){
   })));
   document.querySelectorAll("[data-trash]").forEach(b=>b.addEventListener("click",()=>{
     const id=b.dataset.trash;
-    archived.add(id); persist(); render();
-    if(WRITE_URL){ writeFields(id,{Archived:"TRUE",Status:"Archived",UpdatedAt:new Date().toISOString(),UpdatedBy:UPDATED_BY}); }
-    else { toast(`Archived ${id} for this session. To make it stick for everyone, set Archived = TRUE for ${id} in the Sheet, then hit ↻ Refresh.`); }
+    saveWorkflow(id,{Archived:"TRUE",Status:"Archived",UpdatedAt:new Date().toISOString(),UpdatedBy:UPDATED_BY});
   }));
   document.querySelectorAll("[data-restore]").forEach(b=>b.addEventListener("click",()=>{
     const rid=b.dataset.restore;
-    archived.delete(rid); persist(); render();
-    if(WRITE_URL){ writeFields(rid,{Archived:"FALSE",Status:"",UpdatedAt:new Date().toISOString(),UpdatedBy:UPDATED_BY}); }
+    saveWorkflow(rid,{Archived:"FALSE",Status:"",UpdatedAt:new Date().toISOString(),UpdatedBy:UPDATED_BY});
   }));
   document.querySelectorAll("[data-copy]").forEach(b=>b.addEventListener("click",()=>copyLandlordMessage(b.dataset.copy)));
 }
@@ -1136,7 +1242,7 @@ function renderLeadPanel(){
     ? `(${list.length} on map · ${total} filtered${unmapped ? ` · ${unmapped} unmapped` : ""})`
     : `(${total} shown)`;
   if(hasMap){
-    el("sideSub").textContent = "Showing the leads currently visible in the map view. Pan or zoom the map to change this pane; the full filtered table stays below.";
+    el("sideSub").textContent = "In the current map area";
   }
   el("cards").innerHTML = list.length
     ? list.map(card).join("")
@@ -1145,6 +1251,7 @@ function renderLeadPanel(){
 }
 
 function render(options={}){
+  renderKPIs();
   computeRanks();
   const list=filtered();
   currentFilteredList=list;
@@ -1158,11 +1265,11 @@ function render(options={}){
       const m=L.marker([lat,lon],{icon:iconFor(r)}).bindPopup(popup(r)).addTo(map);
       markers.push(m); markerById[r.ID]=m; bounds.push([lat,lon]);
     });
-    if(options.fitMap && bounds.length){getPois().forEach(p=>bounds.push([Number(p.lat),Number(p.lon)]));map.fitBounds(bounds,{padding:[40,40],maxZoom:13});}
+    if(options.fitMap){getPois().forEach(p=>bounds.push([Number(p.lat),Number(p.lon)]));if(bounds.length)map.fitBounds(bounds,{padding:[40,40],maxZoom:13});}
   }
   renderLeadPanel();
   const ab=el("archivebar");
-  if(state.view==="archived"){ const nArch=rows.filter(isArchived).length; ab.classList.add("show"); ab.textContent = nArch ? `${nArch} archived listing(s). Restore only changes this browser unless write-back is configured. For shared cleanup, set Archived=TRUE/FALSE in the Sheet and refresh.` : "No archived listings yet. The archive button is session-only here; set Archived=TRUE in the Sheet for shared cleanup."; }
+  if(state.view==="archived"){ const nArch=rows.filter(isArchived).length; ab.classList.add("show"); ab.textContent = WRITE_URL ? `${nArch} archived listing(s). Archive and restore are saved to the shared Sheet; a failed save is undone.` : `${nArch} archived listing(s). Changes are limited to this browser session.`; }
   else ab.classList.remove("show");
   el("tbody").innerHTML=list.map(tableRow).join("");
   document.querySelectorAll("[data-copy]").forEach(b=>b.addEventListener("click",()=>copyLandlordMessage(b.dataset.copy)));
@@ -1226,7 +1333,7 @@ el("reset").onclick=()=>{state.under1000=state.parking=state.internet=state.newo
   ["under1000","parking","internet","newonly"].forEach(id=>el(id).classList.remove("active"));
   document.querySelectorAll("[data-filter]").forEach(btn=>btn.classList.remove("active"));
   ["search","volume","neighbourhood","source","drive"].forEach(id=>el(id).value="");
-  state.sortKey="PriorityNum";state.sortDir=1;render({fitMap:true});};
+  state.sortKey="ScoreNum";state.sortDir=-1;render({fitMap:true});};
 document.querySelectorAll("th[data-k]").forEach(th=>th.addEventListener("click",()=>{
   const k=th.dataset.k;
   if(state.sortKey===k) state.sortDir*=-1; else {state.sortKey=k;state.sortDir=1;}
@@ -1237,7 +1344,7 @@ document.querySelectorAll("th[data-k]").forEach(th=>th.addEventListener("click",
 
 function csvForRows(list){
   const baseCols = [
-    "ID","Volume","Action","Priority","Listing / lead","Source","ListingKind","Neighbourhood","Address / locator",
+    "ID","SearchID","FitCategory","Volume","Action","Priority","Listing / lead","Source","ListingKind","Neighbourhood","Address / locator",
     "Type","Rent text","Approx monthly share","Est drive min","Parking","Internet / utilities",
     "Availability","What to verify","URL","Maps link","Score","ScoreAuto","ScoreOverride","Archived","IsNew"
   ];
@@ -1273,7 +1380,10 @@ const masterBtn=el("downloadMaster");
 if(masterBtn) masterBtn.onclick=exportMasterCsv;
 
 /* ===================== My places (POIs) + route selector ================== */
-function reDeriveAll(){ rows.forEach(deriveListing); }
+function reDeriveAll(){
+  allRows.forEach(deriveListing);
+  rows=allRows.filter(r=>ListingRules.matchesSearch(r,activeProfile().searchId));
+}
 
 /* Single entry point for anything that changes the active profile (the
    questionnaire, the profile switcher, the places panel): re-score every row
@@ -1281,9 +1391,9 @@ function reDeriveAll(){ rows.forEach(deriveListing); }
 window.applyProfileChange = function(opts){
   // Switching to a profile that reads a different Sheet tab needs a refetch,
   // not just a re-score. Only refetch when the tab actually changed.
-  const wantTab = (typeof profileSheetTab === "function") ? profileSheetTab("listings") : "";
-  if(wantTab !== lastLoadedTab){ init(); return; }
   reDeriveAll();
+  populateFilters();
+  renderSearchHeader();
   renderKPIs();
   renderPois();
   renderRouteSelect();
@@ -1316,7 +1426,7 @@ function fillPoiPanel(){
     row.querySelector('[data-f="lon"]').value  = p.lon!=null&&p.lon!=="" ? p.lon : "";
   }
   const br=el("budgetRent"), bs=el("budgetSale"), st=el("sheetTab");
-  if(br) br.value=num(config.budgetRent,1000);
+  if(br) br.value=config.budgetRent ?? "";
   if(bs) bs.value=num(config.budgetSale,500000);
   if(st) st.value=asText(activeProfile().sheetTab);
 }
@@ -1329,13 +1439,13 @@ function savePoiPanel(){
     const name=row.querySelector('[data-f="name"]').value.trim();
     const lat=parseFloat(row.querySelector('[data-f="lat"]').value);
     const lon=parseFloat(row.querySelector('[data-f="lon"]').value);
-    if(Number.isFinite(lat)&&Number.isFinite(lon)) pois.push({name:name||`Place ${pois.length+1}`,lat,lon});
+    if(Number.isFinite(lat)&&Number.isFinite(lon)&&Math.abs(lat)<=90&&Math.abs(lon)<=180) pois.push({name:name||`Place ${pois.length+1}`,lat,lon});
     else if(name) toast(`"${name}" needs coordinates — use Set on map, or right-click in Google Maps and copy them.`);
   }
   config.pois=pois.slice(0,MAX_POIS);
   config.routePoi=Math.min(num(config.routePoi,0),Math.max(pois.length-1,0));
   const br=el("budgetRent"), bs=el("budgetSale"), st=el("sheetTab");
-  if(br&&parseFloat(br.value)>0) config.budgetRent=parseFloat(br.value);
+  if(br)config.budgetRent=br.value.trim()===""?null:parseFloat(br.value)>0?parseFloat(br.value):config.budgetRent;
   if(bs&&parseFloat(bs.value)>0) config.budgetSale=parseFloat(bs.value);
   const tabChanged = st && asText(st.value) !== asText(activeProfile().sheetTab);
   if(st) activeProfile().sheetTab = asText(st.value);
@@ -1346,7 +1456,7 @@ function savePoiPanel(){
     init();   // different tab -> refetch rather than just re-score
     return;
   }
-  reDeriveAll(); renderKPIs(); render({fitMap:true});
+  window.applyProfileChange({fitMap:true});
   toast(pois.length?`Saved ${pois.length} place${pois.length===1?"":"s"} — distances, scores and routes updated.`:"Saved. Add at least one place to unlock distances and routes.");
 }
 
@@ -1388,6 +1498,34 @@ if(hasMap){
    searches at separate tabs) but nothing in this UI sets it. */
 function renderDataTab(){ /* no-op: single-tab workbook */ }
 
+function renderSearchHeader(){
+  const p=activeProfile(), preset=SEARCH_PRESETS.find(x=>x.id===p.searchId);
+  if(el("drive"))el("drive").parentElement.hidden=p.transport!=="car";
+  if(el("commuteHeading"))el("commuteHeading").dataset.k=p.transport==="car"?"DriveNum":"KmNearest";
+  if(el("searchHeading")) el("searchHeading").textContent=p.name;
+  if(el("searchSummary")) el("searchSummary").textContent=[p.city || preset?.city, Number.isFinite(budgetFor("rent")) ? `${fmtMoney(budgetFor("rent"))}/month` : "Budget pending", p.timing || "Timing pending"].filter(Boolean).join(" · ");
+  if(el("briefStatus")){
+    el("briefStatus").hidden=!!p.tuned && !p.briefPending;
+    el("briefStatus").textContent="Complete the search quiz to set your preferences and fit categories.";
+  }
+  if(el("sourceShortcuts")){
+    const city=p.city || preset?.city;
+    el("sourceShortcuts").innerHTML=city ? [
+      ["Facebook",`https://www.facebook.com/marketplace/search/?query=${encodeURIComponent("room apartment rent "+city)}`],
+      ["Kijiji",`https://www.kijiji.ca/b-canada/${encodeURIComponent("rent "+city)}/k0l0`],
+      ["Roomies",`https://www.roomies.ca/rooms/${city.toLowerCase().replace(/,? ontario/,"-on").replace(/[^a-z0-9-]/g,"-")}`]
+    ].map(([name,url])=>linkButton(url,name)).join("") : "";
+  }
+}
+window.renderSearchHeader=renderSearchHeader;
+const shareBtn=el("shareSearch");
+if(shareBtn) shareBtn.onclick=async()=>{
+  const u=new URL(location.href);u.search="";u.hash="";
+  if(activeProfile().searchId)u.searchParams.set("search",activeProfile().searchId);
+  try{await navigator.clipboard.writeText(u.href);toast("Search link copied. Saved Sheet profiles are available from Choose profile.");}
+  catch{prompt("Search link",u.href);}
+};
+
 /* ---- profile switcher (scoring presets, e.g. "Waterloo" vs "London") ---- */
 function renderProfileSwitch(){
   const sel = el("profileSwitch");
@@ -1413,6 +1551,7 @@ if(profSel) profSel.addEventListener("change", e => {
 });
 renderProfileSwitch();
 renderRouteSelect();
+renderSearchHeader();
 const printBtn=el("printView");
 if(printBtn) printBtn.onclick=()=>window.print();
 
@@ -1452,31 +1591,44 @@ async function writeCell(id, field, value){
 
 async function writeFields(id, fields){
   if(!WRITE_URL) return;
+  writePending++;
+  loadVersion++;
   try{
     const payload = WRITE_TOKEN ? {id,fields,token:WRITE_TOKEN} : {id,fields};
-    const res = await fetch(WRITE_URL,{method:"POST",body:JSON.stringify(payload)}); // text/plain body avoids CORS preflight
+    const res = await fetch(WRITE_URL,{method:"POST",body:JSON.stringify(payload),signal:AbortSignal.timeout(15000)});
     const text = await res.text();
     let data = {};
     try{ data = JSON.parse(text); }catch(e){}
-    if(!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+    if(!res.ok || data.ok !== true || !data.written) throw new Error(data.error || "The endpoint did not confirm a save");
+    const missed=Object.keys(fields).filter(k=>!Object.hasOwn(data.written,k));
+    if(missed.length) throw new Error(`Fields not saved: ${missed.join(", ")}`);
+    if(fields.Archived != null){archived.delete(id);persist();}
+    const row=allRows.find(r=>String(r.ID)===String(id));
+    if(row){Object.assign(row,data.written);deriveListing(row);}
     toast(`Saved ${id} to the Sheet.`);
     setTimeout(()=>init(), 900);
+    return true;
   }catch(e){
-    toast(`Couldn't write ${id} to the Sheet (${e.message}). The local view updated, but shared sync needs the Apps Script endpoint.`);
-  }
+    toast(`Couldn't save ${id} (${e.message}). The change was undone so this view stays aligned with the Sheet.`);
+    return false;
+  }finally{writePending--;}
 }
 
 function applyData(d){
-  rows = (d && d.rows) || [];
+  const incoming=(d && d.rows) || [],ids=new Map();
+  incoming.forEach(r=>{const id=asText(r.ID);if(id)ids.set(id,(ids.get(id)||0)+1);});
+  allRows = incoming.map(r=>deriveListing({...r,DuplicateID:ids.get(asText(r.ID))>1}));
+  reDeriveAll();
   sites = (d && d.sites) || [];
   const shouldFitMap = !hasRenderedData;
+  renderSearchHeader();
   renderKPIs(); populateFilters(); renderSites();
   if(typeof renderDataTab === "function") renderDataTab();
   render({fitMap: shouldFitMap});
   hasRenderedData = true;
 }
-function cacheSave(){ try{ localStorage.setItem("oiart_cache", JSON.stringify({rows,sites,ts:Date.now()})); }catch(e){} }
-function cacheLoad(){ try{ const c=JSON.parse(localStorage.getItem("oiart_cache")); if(c && Array.isArray(c.rows)) return c; }catch(e){} return null; }
+function cacheSave(){ try{ localStorage.setItem(`hf_cache_${SHEET_ID}`, JSON.stringify({rows:allRows,sites,ts:Date.now()})); }catch(e){} }
+function cacheLoad(){ try{ const c=JSON.parse(localStorage.getItem(`hf_cache_${SHEET_ID}`)); if(c && Array.isArray(c.rows)) return c; }catch(e){} return null; }
 async function loadRepoCsvFallback(){
   const [r,s]=await Promise.all([
     loadCsv(CSV_FALLBACKS.listings,"listings"),
@@ -1486,6 +1638,7 @@ async function loadRepoCsvFallback(){
 }
 
 async function init(){
+  const version=++loadVersion;
   if(SHEET_ID==="PASTE_SHEET_ID_HERE"){
     const cached=cacheLoad();
     if(cached){ applyData(cached); setSourceBadge("Cached data","warn",cached.ts); setStatus(`No Sheet ID set yet — showing a cached copy from ${new Date(cached.ts).toLocaleString()}. Paste your SHEET_ID in index.html to go live.`,"warn"); }
@@ -1504,12 +1657,16 @@ async function init(){
   setSourceBadge("Loading Sheet","warn");
   try{
     const [r,s]=await Promise.all([loadSheetWithTabs("listings"), loadSheetWithTabs("sites")]);
+    if(version!==loadVersion || writePending) return;
     lastLoadedTab = (typeof profileSheetTab === "function") ? profileSheetTab("listings") : "";
     applyData({rows:r,sites:s}); cacheSave();
     setSourceBadge("Live Sheet","ok");
     setStatus(`Live — ${r.length} listings loaded from ${lastLoadedTab ? `"${lastLoadedTab}"` : "the Sheet"} at ${new Date().toLocaleTimeString()}.`,"ok");
     setTimeout(()=>setStatus("",""),4000);
   }catch(e){
+    if(version!==loadVersion || writePending) return;
+    const cached=cacheLoad();
+    if(cached){applyData(cached);setSourceBadge("Cached Sheet","warn",cached.ts);setStatus(`Sheet unavailable. Showing your last loaded data from ${new Date(cached.ts).toLocaleString()}.`,"warn");return;}
     try{
       const csv=await loadRepoCsvFallback();
       applyData(csv); setSourceBadge("Seed CSV fallback","warn");
@@ -1528,6 +1685,7 @@ init();
 // Auto-refresh, but never mid-edit: an open status editor, an active form field,
 // or the copy-fallback box would otherwise get wiped by a re-render every 60s.
 function isEditing(){
+  if(writePending) return true;
   if(document.querySelector(".workflowedit[open]")) return true;
   if(el("copyFallback")) return true;
   if(document.getElementById("quiz") && !document.getElementById("quiz").hidden) return true;

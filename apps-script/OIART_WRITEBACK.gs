@@ -1,5 +1,5 @@
 /*
-  OIART Rental Finder write-back endpoint  (v2 — future-proof, header-driven)
+  Rental Finder write-back endpoint (v3, header-driven)
 
   WHY THIS VERSION EXISTS
   -----------------------
@@ -21,7 +21,7 @@
      Version: "New version" > Deploy.   [Editing the existing deployment keeps
      the SAME /exec URL, so app.js needs no change.]
   3. Verify: open the /exec URL in a browser. You should see
-     "version":"2026-06-01-v2" and ListingKind inside "writableColumns".
+     "version":"2026-10-17-v3" and "saveProfile" inside "capabilities".
 
   SECURITY MODEL
   --------------
@@ -33,7 +33,7 @@
   name to PROTECTED_FIELDS so it stays read-only to the endpoint.
 */
 
-const SHEET_VERSION = "2026-06-01-v2";   // bump whenever you redeploy; doGet echoes it
+const SHEET_VERSION = "2026-10-17-v3";
 const LISTINGS_SHEET_NAME = "Listings";
 const FALLBACK_LISTINGS_SHEET_NAME = "listings";
 
@@ -48,7 +48,8 @@ const PROTECTED_FIELDS = [
   "Address / locator", "Type", "Rent text", "Approx monthly share", "Est drive min",
   "Km straight-line", "Parking", "Internet / utilities", "Availability", "Furnishing",
   "Criteria fit", "Why add / note", "What to verify", "Date seen", "Last checked",
-  "URL", "Maps link", "Score", "ScoreOverride", "Latitude", "Longitude", "IsNew"
+  "URL", "Maps link", "Score", "ScoreOverride", "Latitude", "Longitude", "IsNew", "SearchID",
+  "Roommates", "ParkingSpaces", "Laundry", "PetsAllowed", "Accessible", "LeaseMonths"
 ];
 
 // Workflow/metadata columns we make sure exist (created if missing). Adding to
@@ -58,15 +59,14 @@ const PROTECTED_FIELDS = [
 const ENSURE_COLUMNS = [
   "Archived", "Status", "Contacted", "LastContacted", "Response", "ViewingBooked",
   "ViewingDate", "Decision", "RemoveReason", "FriendNotes", "ParkingConfirmed",
-  "InternetConfirmed", "AddressConfirmed", "JulyConfirmed", "ScamRisk",
+  "InternetConfirmed", "AddressConfirmed", "JulyConfirmed", "TimingConfirmed", "ScamRisk",
   "UpdatedAt", "UpdatedBy", "CanonicalKey", "DuplicateOf", "ListingKind",
-  "ImageURL", "ImageAlt", "ImageSource", "ImageChecked"
+  "ImageURL", "ImageAlt", "ImageSource", "ImageChecked", "OffMarketSince"
 ];
 
-// Stored as real booleans. Matched by name so future *Confirmed / *Checked
-// columns are handled automatically without editing this function.
+// ImageChecked holds a date, not a checkbox.
 function isBooleanField_(name) {
-  return /^(Archived|Contacted|ViewingBooked|IsNew)$/.test(name) || /(Confirmed|Checked)$/.test(name);
+  return /^(Archived|Contacted|ViewingBooked|IsNew)$/.test(name) || /Confirmed$/.test(name);
 }
 
 function isWritable_(field) {
@@ -74,11 +74,14 @@ function isWritable_(field) {
 }
 
 function doPost(e) {
+  const lock = LockService.getDocumentLock() || LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return json_({ok:false,error:"Another update is saving. Try again."});
   try {
     const payload = JSON.parse((e && e.postData && e.postData.contents) || "{}");
     if (WRITE_TOKEN && String(payload.token || "") !== WRITE_TOKEN) {
       return json_({ok: false, error: "Unauthorized"});
     }
+    if (payload.action === "saveProfile") return saveSearchProfile_(payload.profile);
     const id = String(payload.id || "").trim();
     const updates = payload.fields || (payload.field ? {[payload.field]: payload.value} : {});
     if (!id) return json_({ok: false, error: "Missing id"});
@@ -89,15 +92,18 @@ function doPost(e) {
     const idCol = header.indexOf("ID");
     if (idCol < 0) return json_({ok: false, error: "Missing ID column"});
 
-    let rowIndex = -1;
+    let rowIndex = -1, matches = 0;
     const lastRow = sh.getLastRow();
     if (lastRow >= 2) {
       const idValues = sh.getRange(2, idCol + 1, lastRow - 1, 1).getValues();
       for (let i = 0; i < idValues.length; i++) {
-        if (String(idValues[i][0]).trim() === id) { rowIndex = i + 2; break; }
+        if (String(idValues[i][0]).trim() === id) { rowIndex = i + 2; matches++; }
       }
     }
     if (rowIndex < 0) return json_({ok: false, error: "ID not found: " + id});
+    if (matches > 1) return json_({ok:false,error:"Duplicate ID in Sheet: " + id});
+    const invalid=Object.keys(updates).filter(function(field){return header.indexOf(field)<0 || !isWritable_(field);});
+    if(invalid.length) return json_({ok:false,error:"Fields cannot be saved: " + invalid.join(", ")});
 
     const written = {}, skipped = {};
     Object.keys(updates).forEach(function(field) {
@@ -120,6 +126,8 @@ function doPost(e) {
     return json_({ok: true, id: id, written: written, skipped: skipped});
   } catch (err) {
     return json_({ok: false, error: String(err && err.message || err)});
+  } finally {
+    lock.releaseLock();
   }
 }
 
@@ -129,7 +137,9 @@ function doGet() {
     ok: true,
     service: "OIART Rental Finder write-back",
     version: SHEET_VERSION,
-    tokenRequired: !!WRITE_TOKEN
+    tokenRequired: !!WRITE_TOKEN,
+    capabilities: ["workflow", "saveProfile"],
+    profilesSheetId: 197601017
   };
   try {
     const sh = getListingsSheet_();
@@ -156,9 +166,28 @@ function setupOiartRentalSheet() {
 
 function getListingsSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sh = ss.getSheetByName(LISTINGS_SHEET_NAME) || ss.getSheetByName(FALLBACK_LISTINGS_SHEET_NAME);
-  if (!sh) throw new Error("Could not find Listings/listings tab");
+  const sh = ss.getSheetByName(LISTINGS_SHEET_NAME) || ss.getSheetByName("OIART BASED LISTINGS") || ss.getSheetByName(FALLBACK_LISTINGS_SHEET_NAME);
+  if (!sh) throw new Error("Could not find the listings tab");
   return sh;
+}
+
+function saveSearchProfile_(profile) {
+  if(!profile || typeof profile !== "object" || !/^[a-zA-Z0-9_-]{1,100}$/.test(String(profile.id || ""))) return json_({ok:false,error:"Invalid profile ID"});
+  const name=String(profile.name || "").trim().slice(0,100);
+  const encoded=JSON.stringify(profile);
+  if(!name || encoded.length>20000) return json_({ok:false,error:"Profile name is missing or profile is too large"});
+  const ss=SpreadsheetApp.getActiveSpreadsheet();
+  const sh=ss.getSheetByName("Search Profiles");
+  if(!sh || sh.getSheetId()!==197601017) return json_({ok:false,error:"Search Profiles tab needs setup"});
+  const headers=sh.getRange(1,1,1,5).getValues()[0];
+  if(headers.join("|")!=="ProfileID|Name|SearchID|ProfileJSON|UpdatedAt") return json_({ok:false,error:"Unexpected profile headers"});
+  const ids=sh.getLastRow()>1 ? sh.getRange(2,1,sh.getLastRow()-1,1).getValues() : [];
+  let target=sh.getLastRow()+1;
+  ids.forEach(function(row,i){if(String(row[0])===profile.id)target=i+2;});
+  if(target>sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(),20);
+  const literal=function(value){const s=String(value || "");return /^[=+@-]/.test(s) ? "'"+s : s;};
+  sh.getRange(target,1,1,5).setValues([[profile.id,literal(name),literal(profile.searchId),encoded,new Date().toISOString()]]);
+  return json_({ok:true,action:"saveProfile",id:profile.id});
 }
 
 function ensureColumns_(sh, columns) {
@@ -172,7 +201,8 @@ function ensureColumns_(sh, columns) {
 
 function normalizeValue_(field, value) {
   if (isBooleanField_(field)) return String(value).toUpperCase() === "TRUE";
-  return value == null ? "" : value;
+  if (value == null) return "";
+  return typeof value === "string" && /^[=+@]/.test(value) ? "'" + value : value;
 }
 
 function formatListingsSheet_(sh) {

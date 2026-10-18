@@ -7,7 +7,7 @@
    score re-computes for the active one.
 
    Loaded BEFORE app.js so the scoring engine can read the active profile.
-   Stored in localStorage only; nothing leaves the browser.
+   Stored locally; the questionnaire can explicitly save a shared Sheet profile.
    ========================================================================== */
 
 const MAX_POIS = 3;
@@ -40,6 +40,14 @@ const DEFAULT_PROFILE = {
   priorities: { location:3, cost:3, parking:3, internet:3, privacy:3, lease:3, trust:3 },
   verifiedOnly: false,            // true = wary of classifieds/FSBO -> trust matters more
   timing: "",                     // free text, e.g. "July 2026" / "flexible"
+  searchId: "",                   // shared inventory group, independent of profile name
+  city: "",
+  briefPending: false,
+  answers: {},                    // shared only when the user chooses Sheet save
+  budgetIdeal: null,
+  leaseMonths: "",
+  timingLatest: "",
+  maxRoommates: null,
   tuned: false,                   // has the questionnaire been completed?
   sheetTab: "",                   // Google Sheet tab to read for THIS search
   sitesTab: ""                    // optional per-search Sites tab ("" = default)
@@ -53,11 +61,21 @@ function normalizeProfile(p){
   const out = {...DEFAULT_PROFILE, ...(p || {})};
   out.id = out.id || newProfileId();
   out.pois = (Array.isArray(out.pois) ? out.pois : [])
-    .filter(x => x && isFinite(Number(x.lat)) && isFinite(Number(x.lon)))
-    .slice(0, MAX_POIS);
+    .filter(x => x && x.lat !== "" && x.lon !== "" && x.lat != null && x.lon != null &&
+      Number.isFinite(Number(x.lat)) && Number.isFinite(Number(x.lon)) && Math.abs(Number(x.lat)) <= 90 && Math.abs(Number(x.lon)) <= 180)
+    .slice(0, MAX_POIS).map(x => ({...x, lat:Number(x.lat), lon:Number(x.lon)}));
   out.priorities = {...DEFAULT_PROFILE.priorities, ...(out.priorities || {})};
-  out.mustHaves = Array.isArray(out.mustHaves) ? out.mustHaves : [];
-  out.dealBreakers = Array.isArray(out.dealBreakers) ? out.dealBreakers : [];
+  Object.keys(BASE_WEIGHTS).forEach(k=>out.priorities[k]=Math.max(1,Math.min(5,Math.round(Number(out.priorities[k])||3))));
+  out.mustHaves = Array.isArray(out.mustHaves) ? out.mustHaves.filter(x=>typeof x==="string") : [];
+  out.dealBreakers = Array.isArray(out.dealBreakers) ? out.dealBreakers.filter(x=>typeof x==="string") : [];
+  out.answers = out.answers && typeof out.answers === "object" ? out.answers : {};
+  out.searchId = String(out.searchId || "").trim();
+  if(p && !Object.hasOwn(p,"searchId")){
+    const legacy=[p.name,p.city,p.sheetTab,...out.pois.map(x=>x.name)].join(" ");
+    if(/waterloo/i.test(legacy))out.searchId="waterloo";
+    else if(/london|oiart/i.test(legacy))out.searchId="london-oiart";
+  }
+  out.budgetRent = out.budgetRent === null || out.budgetRent === "" ? null : Math.max(1, Number(out.budgetRent) || 1000);
   out.routePoi = Math.min(Math.max(0, Number(out.routePoi) || 0), Math.max(out.pois.length - 1, 0));
   // The workbook was consolidated to a single listings tab. Clear any stored
   // pointer at the retired tab so old browsers heal themselves on next load.
@@ -72,7 +90,7 @@ function loadProfiles(){
     if(s && Array.isArray(s.list) && s.list.length){
       const list = s.list.map(normalizeProfile);
       const activeId = list.some(p => p.id === s.activeId) ? s.activeId : list[0].id;
-      return { list, activeId };
+      return addPresets({ list, activeId });
     }
   }catch(e){}
   // Migrate the older single "hf_config" (places + budgets) into profile #1
@@ -81,8 +99,23 @@ function loadProfiles(){
     const c = JSON.parse(localStorage.getItem("hf_config"));
     if(c && typeof c === "object") seed = {pois:c.pois, budgetRent:c.budgetRent, budgetSale:c.budgetSale, routePoi:c.routePoi};
   }catch(e){}
+  if(!seed.pois?.length){
+    const first=normalizeProfile({...SEARCH_PRESETS[0],searchId:SEARCH_PRESETS[0].id,id:"preset-"+SEARCH_PRESETS[0].id});
+    return addPresets({list:[first],activeId:first.id});
+  }
   const first = normalizeProfile({...seed, name:"My search"});
-  return { list:[first], activeId:first.id };
+  return addPresets({ list:[first], activeId:first.id });
+}
+
+function addPresets(saved){
+  SEARCH_PRESETS.forEach(preset => {
+    if(saved.list.some(p => p.searchId === preset.id)) return;
+    saved.list.push(normalizeProfile({...preset, searchId:preset.id, id:"preset-"+preset.id}));
+  });
+  const requested = new URLSearchParams(location.search).get("search");
+  const match = saved.list.find(p => p.searchId === requested);
+  if(requested && match) saved.activeId = match.id;
+  return saved;
 }
 
 function saveProfiles(){ try{ localStorage.setItem("hf_profiles", JSON.stringify(HF)); }catch(e){} }
@@ -105,7 +138,8 @@ function upsertProfile(p){
 function addProfile(name){
   const base = activeProfile();
   const p = normalizeProfile({...DEFAULT_PROFILE, name: name || "New search", id: newProfileId(),
-    budgetRent: base.budgetRent, budgetSale: base.budgetSale});
+    searchId:base.searchId, city:base.city, pois:base.pois.map(p=>({...p})),
+    budgetRent:null, mustHaves:[], dealBreakers:[], briefPending:true});
   HF.list.push(p); HF.activeId = p.id; saveProfiles();
   return p;
 }
@@ -127,6 +161,9 @@ function weightsFor(market, prof){
   const raw = {};
   keys.forEach(k => {
     let w = BASE_WEIGHTS[k] * (PRIORITY_FACTOR[p.priorities[k]] != null ? PRIORITY_FACTOR[p.priorities[k]] : 1);
+    const required={parking:["parking"],internet:["internet"],privacy:["privateBedroom","privateBath","separateEntrance"]};
+    if((required[k] || []).some(key=>p.mustHaves.includes(key))) w *= 1.35;
+    if(k === "privacy" && ["couple","family"].includes(p.household)) w *= 1.25;
     // Mode-aware nudges: parking barely matters without a car; it matters more
     // for drivers who commute daily.
     if(k === "parking"){
@@ -145,7 +182,9 @@ function weightsFor(market, prof){
   });
   const sum = keys.reduce((a, k) => a + raw[k], 0) || 1;
   const out = {};
-  keys.forEach(k => { out[k] = Math.max(2, Math.round(raw[k] / sum * 100)); });
+  keys.forEach(k => { out[k] = Math.floor(raw[k] / sum * 100); });
+  const remainder=100-Object.values(out).reduce((a,b)=>a+b,0);
+  [...keys].sort((a,b)=>(raw[b]/sum*100-out[b])-(raw[a]/sum*100-out[a])).slice(0,remainder).forEach(k=>out[k]++);
   return out;
 }
 
@@ -176,7 +215,8 @@ function profileSheetTab(kind){
 }
 function budgetForMarket(market){
   const p = activeProfile();
-  return market === "sale" ? (Number(p.budgetSale) || 500000) : (Number(p.budgetRent) || 1000);
+  const value = market === "sale" ? p.budgetSale : p.budgetRent;
+  return value != null && value !== "" && Number(value) > 0 ? Number(value) : NaN;
 }
 function budgetIsFirm(){ return !!activeProfile().budgetFirm; }
 function hasDealBreaker(k){ return (activeProfile().dealBreakers || []).includes(k); }

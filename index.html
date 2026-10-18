@@ -10,6 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500;1,9..144,600&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="workspace.css">
 </head>
 <body>
 <div class="appbar">
@@ -23,24 +24,17 @@
   <span class="spacer"></span>
   <label class="sronly" for="profileSwitch">Active search</label>
   <select class="profileswitch" id="profileSwitch" title="Switch between saved searches — each keeps its own places, budget and scoring weights"></select>
-  <button class="placesbtn" id="poiBtn" type="button" title="Set up to three anchor places — distances, rings, scores and routes measure to them">📍 My places</button>
-  <button class="tunebtn" id="qopen" type="button" title="Answer a few questions and the ranking re-tunes to your priorities">✨ Tune my search</button>
+  <button class="placesbtn" id="chooseProfile" type="button">Choose profile</button>
+  <button class="placesbtn" id="poiBtn" type="button" title="Set your destinations">My places</button>
+  <button class="tunebtn" id="qopen" type="button" title="Edit your answers and preferences">Edit search quiz</button>
   <span class="sourcebadge" id="sourceBadge">Loading data...</span>
   <button class="dl" id="downloadMaster" type="button" title="Download every listing (all columns) as a CSV"><span>⬇ Export master CSV</span></button>
 </div>
 
-<header class="hero" data-reveal>
-  <div class="hero-orbs" aria-hidden="true"><i class="orb o1"></i><i class="orb o2"></i><i class="orb o3"></i></div>
-  <span class="herokicker"><i class="livedot" aria-hidden="true"></i>Live tracker · your search, your places</span>
-  <h1>Find the <em>right home</em> — anywhere</h1>
-  <p class="lead">Every listing — rental or for sale — scored 0–100 on commute, cost, parking &amp; internet, privacy, timing and trust, then plotted against <b>up to three places you choose</b> (work, school, family) with 5&nbsp;km and 10&nbsp;km rings. Set yours with <b>📍 My places</b>, filter, sort, click a pin, open the listing or route.</p>
-  <details class="howit">
-    <summary>How the board works</summary>
-    <div class="howitbody">
-      <p><b>Vol 1</b> = core budget fits; <b>Vol 2</b> = stretch/lifestyle options. Highlighted listings were added this round. The <b>location score</b> weights distance to all your places, with Place 1 counting most — so a home near everything beats one near only the gym.</p>
-      <p>Hover any score for its full component breakdown. Orange <b>Confirm</b> chips mark details the listing never stated — the score is honest about what's still unknown, and a missing must-have (location, price, parking for rentals) caps it. For-sale listings score on possession and property type instead of internet and roommates. Archive anything dead with the trash icon. The spreadsheet is the source of truth — edit it, then hit Refresh.</p>
-    </div>
-  </details>
+<header class="searchheader">
+  <div><h1 id="searchHeading">Your housing search</h1><p id="searchSummary"></p></div>
+  <div class="searchactions"><nav id="sourceShortcuts" aria-label="Search listing sources"></nav><button class="linkbtn" id="shareSearch" type="button">Copy search link</button></div>
+  <p id="briefStatus" class="briefstatus" hidden></p>
 </header>
 
 <div class="wrap">
@@ -50,7 +44,7 @@
     <div class="fields">
       <div class="searchfield"><label for="search">Search</label><input id="search" placeholder="street, area, 'parking', 'basement'…"></div>
       <div><label for="market">Market</label><select id="market"><option value="">All</option><option value="rent">Rentals</option><option value="sale">For sale</option></select></div>
-      <div><label for="volume">Volume</label><select id="volume"><option value="">All</option><option value="Vol 1">Vol 1 · core fits</option><option value="Vol 2">Vol 2 · stretch</option></select></div>
+      <div><label for="volume">Fit</label><select id="volume"><option value="">All fits</option><option value="core">Core fits</option><option value="stretch">Stretch / verify</option><option value="outside">Outside parameters</option></select></div>
       <div><label for="neighbourhood">Neighbourhood</label><select id="neighbourhood"><option value="">All</option></select></div>
       <div><label for="source">Source</label><select id="source"><option value="">All</option></select></div>
       <div><label for="drive">Max drive (min)</label><input id="drive" type="number" min="1" placeholder="e.g. 15"></div>
@@ -116,18 +110,16 @@
   </section>
 
   <section id="alltable" class="panel" data-reveal>
-    <div class="kicker">The full board</div>
-    <h2>All leads — sortable</h2>
-    <div class="sub">Click a column header to sort, or the <b>▸</b> button to expand a row's full details (parking, internet, contact, score breakdown…). Yellow rows were added this round.</div>
+    <h2>All listings</h2>
     <div class="tablewrap">
       <table>
         <thead><tr>
           <th class="colexpand" aria-hidden="true"></th>
           <th data-k="PriorityNum">#<span class="arr">▼</span></th>
           <th data-k="Listing / lead">Listing</th>
-          <th data-k="Volume">Vol</th>
+          <th data-k="FitCategory">Fit</th>
           <th data-k="RentNum">Rent</th>
-          <th data-k="DriveNum">Drive</th>
+          <th data-k="DriveNum" id="commuteHeading">Commute</th>
           <th data-k="ScoreNum">Score</th>
           <th data-k="Status">Status</th>
           <th>Links</th>
@@ -138,15 +130,13 @@
   </section>
 
   <section id="sites-panel" class="panel" data-reveal>
-    <div class="kicker">The playbook</div>
-    <h2>Where to search — sites &amp; filters</h2>
-    <div class="sub">Generic, widely-available listing sources for rentals and homes for sale. Apply the same filter discipline everywhere, and prefer direct listing pages over search pages.</div>
+    <h2>Listing sources</h2>
     <div class="sitegrid" id="sites"></div>
   </section>
 
   <aside class="note" data-reveal>
     <span class="noteicon" aria-hidden="true">ⓘ</span>
-    <div><b>Honest notes:</b> map pins are exact where an address was given, otherwise a neighbourhood centroid (so a few sit at the area's middle). Distances are straight-line and drive times are estimates — confirm in Google Maps at your real commute time. Orange chips mark details a listing never stated; each says what to check before you commit. Some classifieds entries point to a live search page because their detail pages block automated reads. The spreadsheet is the source of truth — edit it, then hit Refresh data.</div>
+    <div>Availability and approximate map locations need confirmation. Check total rent, parking, move-in timing, and the actual commute with the lister before committing.</div>
   </aside>
 </div>
 
@@ -212,9 +202,10 @@
   </div>
 </div>
 
+<script src="searches.js"></script>
+<script src="listing-rules.js"></script>
 <script src="profile.js"></script>
 <script src="app.js"></script>
 <script src="questionnaire.js"></script>
-<script src="enhance.js"></script>
 </body>
 </html>
