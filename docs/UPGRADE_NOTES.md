@@ -30,7 +30,12 @@ fragile display-name lookup.
 - Added `SearchID`, `OffMarketSince`, `TimingConfirmed`, `Roommates`,
   `ParkingSpaces`, `Laundry`, `PetsAllowed`, `Accessible`, and `LeaseMonths`.
   Blank facts mean unknown, not false. Header notes explain these fields.
-- Added `Search Profiles`, gid `197601017`, with a provisional Trent profile.
+- Added `Search Profiles`, gid `197601017`. Its initial provisional Trent entry
+  was subsequently removed at the user's request. OIART is the only automatic
+  profile; the other cities remain inventory/quiz templates, not saved people.
+  Untouched old starter profiles are pruned on load; real saved/edited profiles
+  are preserved. The chooser searches by name/city, deduplicates IDs, and renders
+  40 results at a time. Storage failures are reported rather than called saved.
 - Backed up all original 123 listing rows and native cell data locally before
   deletion: `.local-tools/backups/rental-sheet-before-cleanup-2026-10-17.json`.
   This backup is ignored by Git and is not deployed.
@@ -80,6 +85,14 @@ Reviewed and installed locally, not bundled into the public website:
   supplies them. The actual Peterborough test returned **zero listings**. The
   server is installed and speaks MCP, but usable Canadian coverage is not proven.
   Do not invent listings, prices, images, or claims that a listing was verified.
+- Follow-up diagnostic: six broad searches (Toronto sofa/bicycle, New York car,
+  Phoenix go kart, London apartment, Peterborough room) all returned no data.
+  Toronto geocoding was correct, but Facebook returned zero raw feed edges;
+  a 24-result New York phone query and its next page were also empty. Two
+  existing direct item IDs returned URL-only details with no photos. Treat
+  this adapter as **not operational for data retrieval**, not as evidence that
+  inventory is empty. It has no login support; use the authenticated browser
+  fallback rather than adding cookies or paying for a proxy to guess around it.
 - Official Microsoft Playwright MCP is installed as `housing-browser`, using
   Edge and its own ignored browser profile. Its tools and local-site navigation
   were tested. Login to Facebook in that browser when needed; it does not inherit

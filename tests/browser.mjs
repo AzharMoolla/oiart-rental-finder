@@ -71,6 +71,7 @@ try{
   assert.notEqual(rollback.status,'Archived');
   await page.unroute(endpoint);
   await page.route(endpoint,async route=>{
+    if(route.request().method()==='GET'){await route.fulfill({json:{ok:true,capabilities:['workflow','saveProfile']}});return;}
     const payload=route.request().postDataJSON();
     await route.fulfill({json:{ok:true,written:payload.fields}});
   });
@@ -87,6 +88,20 @@ try{
   await page.click('#qclose');await page.screenshot({path:'.local-tools/qa/board-mobile.png',fullPage:true});
   const persistence=await page.evaluate(()=>JSON.parse(localStorage.getItem('hf_profiles')).list.some(p=>p.name==='Browser test - Trent' && p.tuned));
   assert.ok(persistence,'Profile persisted');
+  await page.evaluate(()=>{
+    const base=activeProfile();
+    HF.list=Array.from({length:500},(_,i)=>({...base,id:'many-'+i,name:'Friend '+String(i).padStart(3,'0')}));
+    HF.activeId='many-0';saveProfiles();
+  });
+  await page.click('#chooseProfile');
+  await page.locator('#profileSearch').waitFor();
+  assert.equal(await page.locator('[data-profile-choice]').count(),40);
+  await page.click('#moreProfiles');
+  assert.equal(await page.locator('[data-profile-choice]').count(),80);
+  await page.fill('#profileSearch','Friend 047');
+  assert.equal(await page.locator('[data-profile-choice]').count(),1);
+  await page.locator('[data-profile-choice]').click();
+  assert.equal(await page.evaluate(()=>activeProfile().name),'Friend 047');
   assert.deepEqual(errors,[]);
   console.log(JSON.stringify({passed:true,result,refresh,screenshots:'.local-tools/qa'},null,2));
 }finally{await browser.close();}

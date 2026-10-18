@@ -1538,12 +1538,8 @@ const profSel = el("profileSwitch");
 if(profSel) profSel.addEventListener("change", e => {
   const v = e.target.value;
   if(v === "__new"){
-    const name = prompt("Name this search (e.g. Waterloo, London, Downtown condo):", "New search");
-    if(!name){ renderProfileSwitch(); return; }
-    addProfile(name.trim());
-    window.applyProfileChange({fitMap:true});
-    toast(`Created "${name.trim()}" — set its places and tune the scoring.`);
-    if(window.openQuestionnaire) window.openQuestionnaire();
+    renderProfileSwitch();
+    if(window.openQuestionnaire) window.openQuestionnaire(true);
     return;
   }
   setActiveProfile(v);

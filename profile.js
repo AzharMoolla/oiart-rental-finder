@@ -53,6 +53,7 @@ const DEFAULT_PROFILE = {
   sitesTab: ""                    // optional per-search Sites tab ("" = default)
 };
 
+let profilesSavedLocally = true;
 let HF = loadProfiles();
 
 function newProfileId(){ return "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
@@ -107,18 +108,32 @@ function loadProfiles(){
   return addPresets({ list:[first], activeId:first.id });
 }
 
+function isStarterProfile(p){
+  if(p.tuned || Object.values(p.answers || {}).some(v=>Array.isArray(v)?v.length:!!v))return false;
+  const preset=SEARCH_PRESETS.find(x=>x.id!=="london-oiart" && p.id==="preset-"+x.id);
+  if(p.id==="shared-trent-peterborough")return p.name==="Peterborough / Trent - brief pending" && p.budgetRent==null;
+  return !!preset && p.name===preset.name && p.budgetRent===preset.budgetRent &&
+    JSON.stringify(p.pois)===JSON.stringify(preset.pois);
+}
 function addPresets(saved){
-  SEARCH_PRESETS.forEach(preset => {
-    if(saved.list.some(p => p.searchId === preset.id)) return;
-    saved.list.push(normalizeProfile({...preset, searchId:preset.id, id:"preset-"+preset.id}));
-  });
+  saved.list=saved.list.filter(p=>!isStarterProfile(p));
+  const preset=SEARCH_PRESETS.find(p=>p.id==="london-oiart");
+  if(!saved.list.some(p=>p.searchId===preset.id)){
+    saved.list.push(normalizeProfile({...preset,searchId:preset.id,id:"preset-"+preset.id,tuned:true}));
+  }
+  saved.list.forEach(p=>{if(p.id==="preset-london-oiart"){p.tuned=true;p.briefPending=false;}});
+  if(!saved.list.some(p=>p.id===saved.activeId))saved.activeId=saved.list[0].id;
   const requested = new URLSearchParams(location.search).get("search");
   const match = saved.list.find(p => p.searchId === requested);
   if(requested && match) saved.activeId = match.id;
+  try{localStorage.setItem("hf_profiles",JSON.stringify(saved));}catch{profilesSavedLocally=false;}
   return saved;
 }
 
-function saveProfiles(){ try{ localStorage.setItem("hf_profiles", JSON.stringify(HF)); }catch(e){} }
+function saveProfiles(){
+  try{localStorage.setItem("hf_profiles",JSON.stringify(HF));profilesSavedLocally=true;return true;}
+  catch{profilesSavedLocally=false;return false;}
+}
 
 function activeProfile(){
   return HF.list.find(p => p.id === HF.activeId) || HF.list[0];

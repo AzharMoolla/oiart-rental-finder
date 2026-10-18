@@ -87,6 +87,9 @@
       draft.id=newProfileId();draft.name="New profile";draft.budgetRent=null;draft.budgetIdeal=null;
       draft.answers={};draft.mustHaves=[];draft.dealBreakers=[];draft.maxRoommates=null;
       draft.priorities={...DEFAULT_PROFILE.priorities};draft.tuned=false;draft.briefPending=true;
+      const requested=new URLSearchParams(location.search).get("search");
+      const preset=SEARCH_PRESETS.find(p=>p.id===requested);
+      if(preset){draft.searchId=preset.id;draft.city=preset.city;draft.pois=structuredClone(preset.pois);draft.timing=preset.timing;}
     }
     step=0;show();paint();
   }
@@ -95,7 +98,7 @@
     const shared=$("shareProfile")?.checked;
     const saved=upsertProfile(draft);
     close();window.applyProfileChange({fitMap:true});
-    toast(`Saved "${saved.name}" on this device.`);
+    toast(profilesSavedLocally?`Saved "${saved.name}" on this device.`:"Browser storage is full or unavailable. This profile is only kept for this visit; save it to the Sheet to keep it.");
     if(shared)await saveSharedProfile(saved);
   }
   async function saveSharedProfile(p){
@@ -104,18 +107,20 @@
       const data=await res.json();
       if(!res.ok || data.ok!==true || data.action!=="saveProfile")throw new Error(data.error||"Shared profile saving is not enabled on the deployed script yet");
       toast(`Saved "${p.name}" to the shared Sheet.`);
-    }catch(e){toast(`Profile saved on this device. Sheet save failed: ${e.message}`);}
+    }catch(e){toast(`${profilesSavedLocally?"Profile saved on this device.":"Profile is only kept for this visit."} Sheet save failed: ${e.message}`);}
   }
   async function loadSharedProfiles(){
     try{
       const res=await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&headers=1&gid=197601017`,{cache:"no-store",signal:AbortSignal.timeout(5000)});
       if(!res.ok)return;
       const list=parseGviz(await res.text());
+      sharedProfiles.clear();
       for(const row of list){
         if(!row.ProfileID || !row.ProfileJSON)continue;
         try{
           const p=JSON.parse(row.ProfileJSON);
           if(!p || typeof p.name!=="string" || p.id!==row.ProfileID)continue;
+          if(isStarterProfile(p))continue;
           sharedProfiles.set(p.id,normalizeProfile(p));
         }catch{}
       }
@@ -131,17 +136,30 @@
     $("qbody").innerHTML='<p>Loading saved profiles...</p>';
     await Promise.all([loadSharedProfiles(),checkSharedSaving()]);
     if($("quiz").hidden || !chooser)return;
-    const profiles=HF.list.map(p=>({...p,fromSheet:false}));
-    for(const p of sharedProfiles.values())profiles.push({...p,fromSheet:true});
-    $("qbody").innerHTML=`<p>Continue a saved search, or create a profile for someone new.</p><div class="profilechoices">${profiles.map((p,i)=>`<button class="profilechoice" data-profile-choice="${i}"><b>${esc(p.name)}</b><span>${esc(p.city||"All locations")} · ${p.fromSheet?"Shared Sheet":"This device"}</span></button>`).join("")}</div><button class="btn primary" id="startNewQuiz">Take the quiz for a new profile</button>`;
-    $("qbody").querySelectorAll("[data-profile-choice]").forEach(btn=>btn.onclick=()=>{
-      const p=profiles[+btn.dataset.profileChoice];
+    const byId=new Map(HF.list.map(p=>[p.id,{...p,fromSheet:false}]));
+    for(const p of sharedProfiles.values())if(!byId.has(p.id))byId.set(p.id,{...p,fromSheet:true});
+    const profiles=[...byId.values()].sort((a,b)=>a.name.localeCompare(b.name));
+    $("qbody").innerHTML=`<label class="quizfield" for="profileSearch"><span>Find a saved profile</span><input id="profileSearch" class="qinput" type="search" placeholder="Name or city" autocomplete="off"></label><p id="profileResultCount" class="qhint" aria-live="polite"></p><div class="profilechoices" id="profileChoices"></div><button class="linkbtn" id="moreProfiles" type="button" hidden>Show more profiles</button><button class="btn primary" id="startNewQuiz">Take the quiz for a new profile</button>`;
+    let limit=40;
+    function paintChoices(){
+      const query=$("profileSearch").value.trim().toLocaleLowerCase();
+      const matches=profiles.filter(p=>(p.name+" "+p.city).toLocaleLowerCase().includes(query));
+      $("profileResultCount").textContent=matches.length?`${Math.min(limit,matches.length)} of ${matches.length} saved profiles`:"No matching profiles";
+      $("profileChoices").innerHTML=matches.slice(0,limit).map(p=>`<button class="profilechoice" data-profile-choice="${esc(p.id)}"><b>${esc(p.name)}</b><span>${esc(p.city||"All locations")} · ${p.fromSheet?"Shared Sheet":"This device"}</span></button>`).join("");
+      $("moreProfiles").hidden=limit>=matches.length;
+    }
+    $("profileSearch").oninput=()=>{limit=40;paintChoices();};
+    $("moreProfiles").onclick=()=>{limit+=40;paintChoices();};
+    $("profileChoices").onclick=e=>{
+      const btn=e.target.closest("[data-profile-choice]");if(!btn)return;
+      const p=byId.get(btn.dataset.profileChoice);if(!p)return;
       if(p.fromSheet)upsertProfile(p);else setActiveProfile(p.id);
       close();window.applyProfileChange({fitMap:true});
       if(!activeProfile().tuned)open(false);
-    });
+    };
+    paintChoices();
     $("startNewQuiz").onclick=()=>open(true);
-    $("qbody").querySelector("button")?.focus();
+    $("profileSearch").focus();
   }
   $("qopen").onclick=()=>open(false);$("chooseProfile").onclick=choose;
   $("qclose").onclick=close;$("quizback").onclick=close;
@@ -160,7 +178,7 @@
       else if(!e.shiftKey && document.activeElement===last){e.preventDefault();first?.focus();}
     }
   });
-  window.openQuestionnaire=()=>open(false);
+  window.openQuestionnaire=(newOne=false)=>open(newOne);
   window.saveSharedProfile=saveSharedProfile;
   choose();
 })();
