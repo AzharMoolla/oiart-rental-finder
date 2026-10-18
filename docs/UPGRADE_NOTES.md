@@ -195,6 +195,41 @@ be independently confirmed. The cutoff for this pass was July 18, 2026.
   `scripts/prepare-peterborough-import.mjs` builds a review file only and requires
   those local evidence/review files; it never writes the live Sheet itself.
 
+## Additional Sources and Filters - October 18, 2026
+
+- Added Listing site options grouped by canonical platform with inventory counts,
+  plus an independent Home type filter. Raw source attribution is unchanged;
+  rooms are classified from the listing type, not guessed from the platform.
+- Added 67 reviewed leads at `Listings!A179:BI245`: Kijiji 31,
+  Places4Students 20, Visture 7, Bick Properties 4, Zumper 2, Valiant 2,
+  Meant4Rent 1. Peterborough now has 226 leads across 10 sources.
+  Captured 62 additional photo URLs. Existing 177 Sheet rows were compared
+  before/after and remain unchanged, including human workflow states.
+- Eight clear cross-posts and six contradictory/future-intake ads were excluded.
+  One possible same-household Kijiji pair remains flagged. Building ranges,
+  ambiguous price bases, occupancy conflicts, 55+ ads, and group-only whole
+  homes are labelled rather than assigned optimistic per-person costs.
+- Public Places4Students property/sublet details worked without login. Roomies
+  page 3 had no more rooms. Rentals.ca, REALTOR.ca and RentCafe presented
+  access blocks/challenges; no bypass was attempted. Crestview Burnham Place
+  showed waitlists, and an apparent current Meant4Rent entry contained a 2016
+  occupancy date, so neither was imported as a fresh vacancy. Source coverage
+  is a broad sweep, not an exhaustive or landlord-confirmed availability feed.
+- Fixed a live-reader data-integrity issue: gviz inferred LeaseMonths as numeric
+  after new rows and silently omitted 22 older text terms. Known tabs and the
+  snapshot script now use Google's native CSV export, preserving mixed cell
+  types. The source Sheet was not rewritten. Exported numeric display precision
+  may round map coordinates at sub-centimetre scale; source values remain intact.
+- Shared `csv-data.js` handles quoted/multiline fields, escaped quotes, blanks,
+  BOMs and truncated-response rejection. The offline CSV was regenerated from
+  the Sheet, not from an inferred query table.
+- Checks: 21 unit tests; browser workflow/profile regression; campus/area/image
+  checks; per-site and per-home-type filtering, map/selection persistence,
+  desktop/mobile layouts and forced offline fallback in `tests/source-browser.mjs`.
+  Representative images from each photo-bearing source loaded successfully.
+- Read-only evidence and reviewed proposal stay ignored in `.local-tools/`;
+  `scripts/prepare-peterborough-extra.mjs` builds a proposal only, never writes.
+
 ## Campus Pins and Area Preferences
 
 - Offline catalogue: 179 official Ontario campus points, 57 marked main, plus

@@ -46,7 +46,8 @@
       <div><label for="market">Market</label><select id="market"><option value="">All</option><option value="rent">Rentals</option><option value="sale">For sale</option></select></div>
       <div><label for="volume">Fit</label><select id="volume"><option value="">All fits</option><option value="core">Core fits</option><option value="stretch">Stretch / verify</option><option value="outside">Outside parameters</option></select></div>
       <div><label for="neighbourhood">Neighbourhood</label><select id="neighbourhood"><option value="">All</option></select></div>
-      <div><label for="source">Source</label><select id="source"><option value="">All</option></select></div>
+      <div><label for="source">Listing site</label><select id="source"><option value="">All sites</option></select></div>
+      <div><label for="housingType">Home type</label><select id="housingType"><option value="">All types</option><option value="room">Room in shared home</option><option value="sharedBedroom">Shared bedroom</option><option value="unit">Private unit / whole home</option><option value="building">Building / source lead</option><option value="unknown">Type not stated</option></select></div>
       <div><label for="drive">Max drive (min)</label><input id="drive" type="number" min="1" placeholder="e.g. 15"></div>
     </div>
     <div class="chipgroups">
@@ -205,9 +206,10 @@
 <script src="searches.js"></script>
 <script src="campus-data.js?v=20261018-campus"></script>
 <script src="campuses.js?v=20261018-campus"></script>
-<script src="listing-rules.js"></script>
+<script src="listing-rules.js?v=20261018-sources"></script>
+<script src="csv-data.js?v=20261018-sources"></script>
 <script src="profile.js"></script>
-<script src="app.js?v=20261018-campus"></script>
+<script src="app.js?v=20261018-sources"></script>
 <script src="questionnaire.js?v=20261018-campus"></script>
 </body>
 </html>

@@ -28,7 +28,7 @@ try{
     p.answers={};window.applyProfileChange({fitMap:true});
     return {campus:p.pois[0],preferred:preferred.ScoreComponents.find(c=>c.key==='location'),avoid:avoid.FitCategory,unknown:unknown.RequirementUnknown,inventory,sourceCounts};
   });
-  assert.ok(result.campus.campusId);assert.equal(result.avoid,'outside');assert.ok(result.preferred.note.includes('preferred area'));assert.ok(result.unknown.includes('neighbourhood'));assert.equal(result.inventory,159);
+  assert.ok(result.campus.campusId);assert.equal(result.avoid,'outside');assert.ok(result.preferred.note.includes('preferred area'));assert.ok(result.unknown.includes('neighbourhood'));assert.ok(result.inventory>=159);
   await page.selectOption('#routePoi','campus:oiart');
   const route=await page.evaluate(()=>({link:routeLink(rows[0]),primary:config.pois[0].campusId}));
   assert.ok(route.link.includes(encodeURIComponent('42.937,-81.215')));assert.equal(route.primary,campusId);

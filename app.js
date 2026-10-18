@@ -82,14 +82,6 @@ const WRITABLE_FIELDS = [
   "ImageURL","ImageAlt","ImageSource","ImageChecked","OffMarketSince"
 ];
 
-/* Option B fallback (only if you ever hit a CORS edge case with gviz above):
-   publish each tab as CSV (File > Share > Publish to web > tab > CSV), add
-   the PapaParse CDN script tag to <head> (unpkg.com/papaparse@5/papaparse.min.js),
-   paste the two pub?...output=csv URLs here, and call loadSheetCSV() instead.
-   const LISTINGS_CSV_URL = "";
-   const SITES_CSV_URL    = "";
-*/
-
 let rows = [];
 let allRows = [];
 let loadVersion = 0;
@@ -230,29 +222,14 @@ function csvEscape(v){
 function sheetUrl(tabName){
   const ids = {Listings:280478168, "OIART BASED LISTINGS":280478168, Sites:262262253};
   const selector = Object.hasOwn(ids, tabName) ? `gid=${ids[tabName]}` : `sheet=${encodeURIComponent(tabName)}`;
-  return `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&headers=1&${selector}`;
+  // Native CSV preserves mixed text/numeric cells that gviz silently nulls.
+  return Object.hasOwn(ids,tabName)
+    ? `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&${selector}`
+    : `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&headers=1&${selector}`;
 }
 
 function parseCsv(text){
-  const rows = [];
-  let row = [], field = "", inQuotes = false;
-  for(let i = 0; i < text.length; i++){
-    const ch = text[i], next = text[i + 1];
-    if(inQuotes){
-      if(ch === '"' && next === '"'){ field += '"'; i++; }
-      else if(ch === '"') inQuotes = false;
-      else field += ch;
-    }else if(ch === '"') inQuotes = true;
-    else if(ch === ","){ row.push(field); field = ""; }
-    else if(ch === "\n"){
-      row.push(field); rows.push(row); row = []; field = "";
-    }else if(ch !== "\r") field += ch;
-  }
-  if(field || row.length){ row.push(field); rows.push(row); }
-  const header = (rows.shift() || []).map(asText);
-  return rows
-    .filter(r => r.some(cell => asText(cell)))
-    .map((r, index) => ({...Object.fromEntries(header.map((h, i) => [h, r[i] ?? ""])), _RowNumber: index + 2}));
+  return CsvData.objects(text);
 }
 
 // gviz wraps the JSON in google.visualization.Query.setResponse(...). Strip it,
@@ -756,7 +733,8 @@ function deriveSite(o){
 async function loadSheet(url, kind){
   const res = await fetch(url, { cache: "no-store" });
   if(!res.ok) throw new Error("HTTP " + res.status);
-  const list = parseGviz(await res.text());
+  const text=await res.text();
+  const list = url.includes('/export?') ? parseCsv(text) : parseGviz(text);
   if(list.length && !(kind === "sites" ? ("Site" in list[0] || "Category" in list[0]) : "ID" in list[0] && "Listing / lead" in list[0])) throw new Error("Unexpected Sheet headers");
   return kind === "sites" ? list.map(deriveSite) : list.map(deriveListing);
 }
@@ -853,12 +831,13 @@ function updateCounts(){
 }
 
 // Reset to just the "All" option, then repopulate from the live data.
-function populateSelect(id,vals){const s=el(id),previous=s.value;s.length=1;vals.forEach(v=>{const o=document.createElement("option");o.value=v;o.textContent=v;s.appendChild(o);});if(vals.includes(previous))s.value=previous;}
+function populateSelect(id,vals,label=v=>v){const s=el(id),previous=s.value;s.length=1;vals.forEach(v=>{const o=document.createElement("option");o.value=v;o.textContent=label(v);s.appendChild(o);});if(vals.includes(previous))s.value=previous;}
 function populateFilters(){
   neighbourhoods=uniqSorted(rows.map(r=>r.Neighbourhood));
-  sources=uniqSorted(rows.map(r=>r.Source));
+  sources=uniqSorted(rows.map(ListingRules.sourceSite));
   populateSelect("neighbourhood",neighbourhoods);
-  populateSelect("source",sources);
+  const counts=rows.reduce((out,r)=>{const site=ListingRules.sourceSite(r);out[site]=(out[site]||0)+1;return out;},{});
+  populateSelect("source",sources,site=>`${site} (${counts[site]})`);
 }
 
 const hasMap = (typeof L !== "undefined");
@@ -1170,6 +1149,7 @@ async function saveWorkflow(id, fields){
 function filtered(){
   const q=el("search").value.trim().toLowerCase();
   const vol=el("volume").value, neigh=el("neighbourhood").value, src=el("source").value;
+  const housing=el('housingType').value;
   const mk=el("market")?el("market").value:"";
   const drive=el("drive").value?Number(el("drive").value):null;
   let list=rows.filter(r=>{
@@ -1180,7 +1160,8 @@ function filtered(){
     if(vol && r.FitCategory !== vol) return false;
     if(mk && r.MarketType!==mk) return false;
     if(neigh && r.Neighbourhood!==neigh) return false;
-    if(src && r.Source!==src) return false;
+    if(src && ListingRules.sourceSite(r)!==src) return false;
+    if(housing && ListingRules.housingMarket(r)!==housing)return false;
     if(activeProfile().transport==="car" && drive!==null && num(r.DriveNum,999)>drive) return false;
     if(state.under1000 && !r.UnderTarget) return false;
     if(state.parking && !r.HasParking) return false;
@@ -1321,7 +1302,7 @@ function renderSites(){
 let filterTimer=null;
 function renderDebounced(){ clearTimeout(filterTimer); filterTimer=setTimeout(()=>render(), 180); }
 ["search","drive"].forEach(id=>{const e=el(id);if(e)e.addEventListener("input",renderDebounced);});
-["volume","market","neighbourhood","source"].forEach(id=>{const e=el(id);if(e)e.addEventListener("change",render);});
+["volume","market","neighbourhood","source","housingType"].forEach(id=>{const e=el(id);if(e)e.addEventListener("change",render);});
 function toggle(id,key){el(id).setAttribute('aria-pressed',String(state[key]));el(id).onclick=()=>{state[key]=!state[key];el(id).classList.toggle("active",state[key]);el(id).setAttribute('aria-pressed',String(state[key]));render();};}
 toggle("under1000","under1000");toggle("parking","parking");toggle("internet","internet");toggle("newonly","newonly");
 document.querySelectorAll("[data-filter]").forEach(btn => {
@@ -1342,7 +1323,7 @@ el("reset").onclick=()=>{state.under1000=state.parking=state.internet=state.newo
   ["notContacted","waitingReply","viewingBooked","goodOption","needsParking","needsInternet","needsAddress","needsJuly"].forEach(k=>state[k]=false);
   ["under1000","parking","internet","newonly"].forEach(id=>{el(id).classList.remove("active");el(id).setAttribute('aria-pressed','false');});
   document.querySelectorAll("[data-filter]").forEach(btn=>{btn.classList.remove("active");btn.setAttribute('aria-pressed','false');});
-  ["search","volume","neighbourhood","source","drive"].forEach(id=>el(id).value="");
+  ["search","volume","neighbourhood","source","housingType","drive"].forEach(id=>el(id).value="");
   state.sortKey="ScoreNum";state.sortDir=-1;render({fitMap:true});};
 document.querySelectorAll("th[data-k]").forEach(th=>th.addEventListener("click",()=>{
   const k=th.dataset.k;

@@ -6,14 +6,19 @@ const browser=await chromium.launch({channel:'msedge',headless:true});
 const context=await browser.newContext();
 const page=await context.newPage();
 const records=[],failures=[];
-const output='.local-tools/peterborough-web-sweep-2026-10-18.json';
+const extras=process.argv.includes('--extra');
+const output=extras?'.local-tools/peterborough-extra-sources-2026-10-18.json':'.local-tools/peterborough-web-sweep-2026-10-18.json';
 const follow=process.argv.includes('--follow'),managers=process.argv.includes('--managers');
-if(follow||managers){const saved=JSON.parse(await readFile(output,'utf8'));records.push(...saved.records);failures.push(...saved.failures);}
+if(follow||managers||extras){try{const saved=JSON.parse(await readFile(output,'utf8'));records.push(...saved.records);failures.push(...saved.failures);}catch(e){if(!extras)throw e;}}
 await mkdir('.local-tools',{recursive:true});
 async function capture(url){
   try{
     const response=await page.goto(url,{waitUntil:'domcontentloaded',timeout:35000});
     await page.waitForTimeout(1000);
+    if(new URL(page.url()).hostname==='www.places4students.com'){
+      const notice=page.getByRole('button',{name:'I Understand & Agree',exact:true});
+      if(await notice.isVisible()){await notice.click();await page.waitForTimeout(500);}
+    }
     const row=await page.evaluate(()=>({url:location.href,title:document.title,h1:document.querySelector('h1')?.innerText,
       text:document.body.innerText,images:[...document.querySelectorAll('meta[property="og:image"]')].map(x=>x.content),
       structured:[...document.querySelectorAll('script[type="application/ld+json"]')].map(x=>{try{return JSON.parse(x.textContent);}catch{return null;}}),
@@ -25,7 +30,13 @@ async function capture(url){
   }catch(e){failures.push({url,error:String(e)});return null;}
 }
 try{
-  if(managers){
+  if(extras){
+    const blocked=new Set();
+    for(const url of process.argv.slice(2).filter(x=>x.startsWith('https://'))){
+      const host=new URL(url).hostname;if(blocked.has(host))continue;
+      const row=await capture(url);if(row&&[403,429].includes(row.status))blocked.add(host);
+    }
+  }else if(managers){
     const seed=records.find(r=>r.url==='https://www.babcockandrobinson.ca/apartments-for-rent-peterborough');
     for(const url of [...new Set((seed?.links||[]).filter(l=>l.text==='Read More').map(l=>l.url))])await capture(url);
   }else if(follow){

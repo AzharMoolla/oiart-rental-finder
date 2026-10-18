@@ -85,5 +85,23 @@
     const m=s.match(/^~?\s*(\d+(?:\.\d+)?)\s*(?:[-\u2013\u2014]|to)?\s*(\d+(?:\.\d+)?)?\s*$/i);
     return m ? Math.max(Number(m[1]),Number(m[2] || m[1])) : NaN;
   }
-  root.ListingRules = Object.freeze({stated,parking,internet,privacy,timing,searchId,matchesSearch,canonicalKey,driveMinutes});
+  function sourceSite(row){
+    const known=[['facebook.com','Facebook Marketplace'],['roomies.ca','Roomies'],['kijiji.ca','Kijiji'],['places4students.com','Places4Students'],['rentals.ca','Rentals.ca'],['zumper.com','Zumper'],['padmapper.com','PadMapper'],['rentcafe.com','RentCafe'],['realtor.ca','REALTOR.ca'],['meant4rent.ca','Meant4Rent'],['babcockandrobinson.ca','Babcock & Robinson']];
+    let host='';try{host=new URL(text(row.URL)).hostname.toLowerCase().replace(/^www\./,'');}catch{}
+    const match=known.find(([domain])=>host===domain||host.endsWith('.'+domain));
+    if(match)return match[1];
+    const source=text(row.Source);
+    const alias=known.find(([,name])=>source.toLowerCase().startsWith(name.toLowerCase()));
+    return alias?.[1]||source.replace(/\s*\((?:official|private|search|direct)[^)]*\)\s*$/i,'').trim()||host||'Unknown site';
+  }
+  function housingMarket(row){
+    const kind=text(row.ListingKind).toLowerCase(),type=stated(row.Type).toLowerCase();
+    if(/building|search|source|provider-watch|official housing|needs direct/.test(kind))return 'building';
+    if(/shared (bedroom|room)|sharing basis/.test(type))return 'sharedBedroom';
+    if(/\b(?:private|single|semi.private) (?:bed)?room\b|\broom in\b/.test(type))return 'room';
+    if(/\b(?:bed)?room\b/.test(type)&&!/\b\d+[- ]bedroom\b|whole[- ]unit|entire (?:unit|house|apartment)/.test(type))return 'room';
+    if(/apartment|basement|studio|bachelor|house|townhouse|townhome|condo|duplex|whole[- ]unit|\bunit\b/.test(type+' '+kind))return 'unit';
+    return 'unknown';
+  }
+  root.ListingRules = Object.freeze({stated,parking,internet,privacy,timing,searchId,matchesSearch,canonicalKey,driveMinutes,sourceSite,housingMarket});
 })(globalThis);
