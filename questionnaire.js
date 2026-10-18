@@ -11,7 +11,17 @@
   function select(id,label,value,options){
     return `<label class="quizfield" for="${id}"><span>${label}</span><select class="qinput" id="${id}">${options.map(([v,t])=>`<option value="${esc(v)}"${String(value)===v?" selected":""}>${t}</option>`).join("")}</select></label>`;
   }
-  function checks(id,options,values){return `<div class="quizchecks">${options.map(([v,label])=>`<label><input type="checkbox" name="${id}" value="${v}"${(values||[]).includes(v)?" checked":""}> ${label}</label>`).join("")}</div>`;}
+  function checks(id,options,values){return `<div class="quizchecks">${options.map(([v,label])=>`<label><input type="checkbox" name="${id}" value="${v}"${(values||[]).includes(v)?" checked":""}><span>${label}</span></label>`).join("")}</div>`;}
+  function campusOptions(query='',all=false,selected=''){
+    const matches=CampusTools.choices(query,all),current=CampusTools.find(selected);
+    if(current&&!matches.some(c=>c.id===selected))matches.unshift(current);
+    return '<option value="">Custom destination / map point</option>'+matches.map(c=>`<option value="${esc(c.id)}"${c.id===selected?' selected':''}>${esc(CampusTools.label(c))}</option>`).join('');
+  }
+  function campusFields(p){
+    const point=p.pois[0]||{},inferred=CampusTools.choices().find(c=>CampusTools.normalized(point.name).includes(CampusTools.normalized(c.institution))&&Math.abs(c.lat-point.lat)<0.001&&Math.abs(c.lon-point.lon)<0.001);
+    const id=point.campusId||inferred?.id||'';
+    return `<div class="campuscontrols"><label for="campusSearch">Find an Ontario school or city</label><input id="campusSearch" class="qinput" type="search" placeholder="School, campus or city" autocomplete="off"><label><input id="campusAll" type="checkbox"${id&&!CampusTools.find(id)?.main?' checked':''}> Include satellite campuses</label><label for="campus">Campus pin</label><select id="campus" class="qinput">${campusOptions('',id&&!CampusTools.find(id)?.main,id)}</select></div><div id="customDestination"${id?' hidden':''}>${input('destination','Custom place name',point.name||'')}<div class="qtwo">${input('destinationLat','Latitude',point.lat??'','number','step="any" min="-90" max="90"')}${input('destinationLon','Longitude',point.lon??'','number','step="any" min="-180" max="180"')}</div></div>`;
+  }
   const question=(n,title,body)=>`<fieldset class="quizquestion"><legend>${n}. ${title}</legend>${body}</fieldset>`;
   function paint(){
     chooser=false;
@@ -31,7 +41,7 @@
       question(5,"Acceptable housing",checks("housingTypes",[["room","Room in a shared home"],["whole","Private apartment / basement / studio"],["split","Larger place split with roommates"]],a.housingTypes))+
       question(6,"Bedroom and bathroom",`<div class="qtwo">${select("bedroom","Private bedroom",a.bedroom,unknown)}${select("bathroom","Private bathroom",a.bathroom,unknown)}</div>`);
     if(step===2)html=
-      question(7,"School and main destination",select("scope","Search area",p.searchId,[["","All listings"],...SEARCH_PRESETS.map(x=>[x.id,x.name])])+input("destination","Campus / building",p.pois[0]?.name || ""))+
+      question(7,"School and main destination",select("scope","Listing inventory",p.searchId,[["","All listings"],...SEARCH_PRESETS.map(x=>[x.id,x.name])])+campusFields(p))+
       question(8,"Travel and commute",`<div class="qtwo">${select("transport","Travel mode",p.transport,[["car","Drive"],["transit","Transit"],["active","Walk / cycle"],["mixed","Mix / undecided"]])}${input("commute","Maximum one-way minutes",p.maxCommute,"number",'min="5" max="180"')}</div>`)+
       question(9,"Parking",`<div class="qtwo">${select("parkingNeed","Parking",a.parkingNeed,unknown)}${input("parkingSpaces","Number of spaces",a.parkingSpaces,"number",'min="0" max="10"')}</div>${select("paidParking","Paid parking",a.paidParking,[["","Not decided"],["yes","Acceptable within budget"],["no","Not acceptable"]])}`);
     if(step===3)html=
@@ -41,7 +51,7 @@
     if(step===4)html=
       question(13,"Accessibility and stairs",input("access","Requirements (optional)",a.access))+
       question(14,"Household atmosphere",`<div class="qtwo">${select("atmosphere","Preference",a.atmosphere,[["","No preference"],["quiet","Quiet / study-focused"],["social","Social"],["owner","Owner-occupied okay"]])}${input("roommates","Maximum other roommates",p.maxRoommates,"number",'min="0" max="20"')}</div>`)+
-      question(15,"Areas and other destinations",input("areas","Preferred neighbourhoods / areas to avoid",a.areas)+input("otherPlaces","Other important destinations",a.otherPlaces));
+      question(15,"Areas and other destinations",input("preferredAreas","Preferred neighbourhood names (comma-separated)",a.preferredAreas,'text','list="areaChoices" placeholder="e.g. East City, Edmison Heights"')+input("avoidedAreas","Avoided neighbourhood names (comma-separated)",a.avoidedAreas,'text','list="areaChoices" placeholder="e.g. Downtown"')+'<datalist id="areaChoices"></datalist><p class="areastatus" id="areaStatus"></p>'+(a.areas?input('areas','Earlier area notes (not used for matching)',a.areas):'')+`<details><summary>Other destinations (up to two)</summary>${[1,2].map(i=>`${input('placeName'+i,'Destination '+(i+1)+' name',p.pois[i]?.name||'')}<div class="qtwo">${input('placeLat'+i,'Latitude',p.pois[i]?.lat??'','number','step="any" min="-90" max="90"')}${input('placeLon'+i,'Longitude',p.pois[i]?.lon??'','number','step="any" min="-180" max="180"')}</div>`).join('')}</details>`+input("otherPlaces","Other destination notes (not mapped)",a.otherPlaces));
     if(step===5)html=
       question(16,"Priorities and dealbreakers",`<div class="qsliders">${Object.keys(BASE_WEIGHTS).map(key=>`<label class="quizpriority">${esc(SCORE_SHORT[key]||key)}<input aria-label="${key} priority" type="range" min="1" max="5" step="1" data-pri="${key}" value="${p.priorities[key]}"><output>${p.priorities[key]}/5</output></label>`).join("")}</div>${checks("dealBreakers",[["noParking","No parking"],["overBudget","Over maximum budget"],["longCommute","Beyond commute limit"],["sharedBedroom","Shared bedroom"]],p.dealBreakers)}${input("otherDealbreakers","Other dealbreakers",a.otherDealbreakers)}`)+
       question(17,"Viewings",select("viewings","How can you view?",a.viewings,[["","Not decided"],["inPerson","In person"],["video","Video required"],["either","Either"]]))+
@@ -52,7 +62,32 @@
     $("qbody").querySelectorAll("[data-pri]").forEach(el=>el.oninput=()=>{p.priorities[el.dataset.pri]=+el.value;el.nextElementSibling.textContent=el.value+"/5";});
     $("qbody").querySelector("input,select")?.focus();
     const scope=$("scope");
-    if(scope)scope.onchange=()=>{const preset=SEARCH_PRESETS.find(x=>x.id===scope.value);if(preset)$("destination").value=preset.pois[0].name;};
+    if(scope)scope.onchange=()=>{
+      const preset=SEARCH_PRESETS.find(x=>x.id===scope.value);if(!preset)return;
+      const point=preset.pois[0],match=CampusTools.list().find(c=>Math.abs(c.lat-point.lat)<0.002&&Math.abs(c.lon-point.lon)<0.002);
+      $("campus").value=match?.id||'';$("customDestination").hidden=!!match;
+      $("customDestination").querySelectorAll('input').forEach(input=>input.disabled=!!match);
+      $("destination").value=point.name;$("destinationLat").value=point.lat;$("destinationLon").value=point.lon;
+    };
+    if($("campus")){
+      const filter=()=>{$("campus").innerHTML=campusOptions($("campusSearch").value,$("campusAll").checked,$("campus").value);};
+      $("campusSearch").oninput=filter;$("campusAll").onchange=filter;
+      const customMode=()=>{
+        const selected=!!$("campus").value;$("customDestination").hidden=selected;
+        $("customDestination").querySelectorAll('input').forEach(input=>input.disabled=selected);
+      };
+      $("campus").onchange=customMode;customMode();
+    }
+    if($("areaChoices")){
+      const areas=[...new Set(allRows.filter(r=>ListingRules.matchesSearch(r,p.searchId)).map(r=>String(r.Neighbourhood||'').trim()).filter(Boolean))].sort();
+      $("areaChoices").innerHTML=areas.map(s=>`<option value="${esc(s)}"></option>`).join('');
+      const describe=()=>{
+        const names=CampusTools.areaNames($("preferredAreas").value+';'+$("avoidedAreas").value);
+        const unmatched=names.filter(n=>!areas.some(s=>CampusTools.areaMatches(n,s).length));
+        $("areaStatus").textContent=`${areas.length} neighbourhood labels in this inventory. `+(unmatched.length?`No current match: ${unmatched.join(', ')}. `:'')+'Matches neighbourhood names only, not street addresses. Use campus pins or My places for destinations.';
+      };
+      $("preferredAreas").oninput=describe;$("avoidedAreas").oninput=describe;describe();
+    }
   }
   function collect(){
     const p=draft,a=p.answers;
@@ -65,8 +100,24 @@
     read("scope",s=>{
       if(s!==p.searchId){const preset=SEARCH_PRESETS.find(x=>x.id===s);p.searchId=s;p.city=preset?.city||"";p.pois=preset?JSON.parse(JSON.stringify(preset.pois)):[];}
     });
-    read("destination",s=>{if(p.pois[0] && s)p.pois[0].name=s;});
-    ["occupants","existingRoommates","bedroom","bathroom","parkingNeed","parkingSpaces","paidParking","furnishing","internetNeed","laundryNeed","bills","sharedLaundry","pets","access","atmosphere","areas","otherPlaces","otherDealbreakers","viewings","temporary"].forEach(k=>read(k,s=>a[k]=s));
+    if($("campus")){
+      const campus=CampusTools.find($("campus").value);
+      if(campus)p.pois[0]=CampusTools.poi(campus);
+      else{
+        const name=$("destination").value.trim(),lat=optionalNumber($("destinationLat").value),lon=optionalNumber($("destinationLon").value);
+        if(name&&Number.isFinite(lat)&&Number.isFinite(lon))p.pois[0]={name,lat,lon};
+        else if(!name&&!p.pois.slice(1).length)p.pois=[];
+      }
+    }
+    if($("placeName1")){
+      const places=[];
+      for(const i of [1,2]){
+        const name=$("placeName"+i).value.trim(),lat=optionalNumber($("placeLat"+i).value),lon=optionalNumber($("placeLon"+i).value);
+        if(name&&Number.isFinite(lat)&&Number.isFinite(lon))places.push({name,lat,lon});
+      }
+      p.pois=[...p.pois.slice(0,1),...places];
+    }
+    ["occupants","existingRoommates","bedroom","bathroom","parkingNeed","parkingSpaces","paidParking","furnishing","internetNeed","laundryNeed","bills","sharedLaundry","pets","access","atmosphere","areas","preferredAreas","avoidedAreas","otherPlaces","otherDealbreakers","viewings","temporary"].forEach(k=>read(k,s=>a[k]=s));
     if(document.querySelector('[name="housingTypes"]'))a.housingTypes=[...document.querySelectorAll('[name="housingTypes"]:checked')].map(e=>e.value);
     if(document.querySelector('[name="dealBreakers"]'))p.dealBreakers=[...document.querySelectorAll('[name="dealBreakers"]:checked')].map(e=>e.value);
     read("profileName",s=>p.name=s||p.name);
@@ -89,7 +140,8 @@
       draft.priorities={...DEFAULT_PROFILE.priorities};draft.tuned=false;draft.briefPending=true;
       const requested=new URLSearchParams(location.search).get("search");
       const preset=SEARCH_PRESETS.find(p=>p.id===requested);
-      if(preset){draft.searchId=preset.id;draft.city=preset.city;draft.pois=structuredClone(preset.pois);draft.timing=preset.timing;}
+      if(preset){draft.searchId=preset.id;draft.city=preset.city;draft.pois=structuredClone(preset.pois);draft.timing=preset.timing;draft.transport=preset.transport;draft.maxCommute=preset.maxCommute;}
+      draft.routeCampusId='';
     }
     step=0;show();paint();
   }
@@ -165,8 +217,15 @@
   $("qclose").onclick=close;$("quizback").onclick=close;
   $("qback").onclick=()=>{collect();step=Math.max(0,step-1);paint();};
   $("qnext").onclick=()=>{
+    const validatePoint=(name,lat,lon)=>{
+      const n=$(name),a=$(lat),b=$(lon);if(!n||!a||!b)return true;
+      n.setCustomValidity('');
+      if((n.value.trim()||a.value||b.value)&&(!n.value.trim()||a.value===''||b.value==='')){n.setCustomValidity('Add a name and both coordinates, or choose a campus pin.');const details=n.closest('details');if(details)details.open=true;n.reportValidity();return false;}return true;
+    };
+    if($("campus")&&!$("campus").value&&!validatePoint('destination','destinationLat','destinationLon'))return;
+    for(const i of [1,2])if(!validatePoint('placeName'+i,'placeLat'+i,'placeLon'+i))return;
     if(!$("qbody").querySelectorAll("input:invalid").length){collect();if(step===5)finish();else{step++;paint();}}
-    else $("qbody").querySelector("input:invalid").reportValidity();
+    else{const invalid=$("qbody").querySelector("input:invalid"),details=invalid.closest('details');if(details)details.open=true;invalid.reportValidity();}
   };
   document.addEventListener("keydown",e=>{
     if($("quiz").hidden)return;

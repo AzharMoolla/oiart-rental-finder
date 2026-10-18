@@ -11,6 +11,7 @@
 | Listing image hosts | Browser loads only available image URLs; hosts receive normal image requests |
 | Secondhand MCP | Local read-only Facebook public search and listing details; Facebook only enabled, no credentials or paid proxy configured by this project; not part of the hosted app |
 | Playwright MCP | Local browser automation with a separate ignored login profile |
+| Ontario official postsecondary locator | Public campus names, addresses and pins, downloaded into a static catalogue at build time. No runtime geocoder, location tracking, Mapbox account or token is added to the site. |
 
 This is a friends' tool, but an unlisted GitHub Pages URL is not authentication.
 Keep passwords, personal documents, private contact details, and sensitive notes

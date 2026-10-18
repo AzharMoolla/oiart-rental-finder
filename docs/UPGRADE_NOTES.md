@@ -172,3 +172,55 @@ be independently confirmed. The cutoff for this pass was July 18, 2026.
   stay ignored in `.local-tools/secondhand-check-results.json` and
   `.local-tools/peterborough-mcp-details.json`. New Codex sessions may be needed
   to load the registered tools.
+
+## Peterborough Inventory Sweep - October 18, 2026
+
+- Added 159 reviewed leads to `Listings!A20:BI178`: Facebook 46, Roomies 35,
+  Kijiji 34, Zumper 25 and Babcock & Robinson 19. Preserved all 18 existing rows.
+- Captured 158 photo URLs. Browser-loaded a representative image from each
+  source with nonzero image dimensions. Facebook/CDN URLs can expire.
+- Removed five clear cross-posts and one housing-wanted post from the import;
+  two uncertain duplicate pairs remain explicitly flagged rather than deleted.
+- Individual room/unit offers and 25 building pages have distinct ListingKind
+  values. Building advertised ranges remain in Rent text, with no fabricated
+  exact-unit monthly price. Whole-unit rents are not divided by guessed roommates.
+- Placeholder/conflicting prices, semi-private/shared bedrooms, weekly billing,
+  stale dates, unverified map pins and nonmatching photos are flagged. No
+  availability was landlord-confirmed; no messages or applications were sent.
+- Rentals.ca browser access showed a challenge; did not bypass it. Other sites
+  provided direct pages. This is a broad initial sweep, not an exhaustive feed.
+- Read-only collectors: `scripts/collect-peterborough-facebook.mjs` (Secondhand
+  adapter) and `scripts/collect-peterborough-web.mjs` (ordinary Edge pages).
+  Raw evidence and manual review facts stay in ignored `.local-tools/`.
+  `scripts/prepare-peterborough-import.mjs` builds a review file only and requires
+  those local evidence/review files; it never writes the live Sheet itself.
+
+## Campus Pins and Area Preferences
+
+- Offline catalogue: 179 official Ontario campus points, 57 marked main, plus
+  OIART. The official locator is the source, not hand-estimated school coordinates:
+  https://www.ontario.ca/my-career-journey/find-postsecondary-institutions/
+- `node scripts/refresh-campuses.mjs` refreshes the public dataset. Only public
+  campus fields are retained; the locator's public read token is not shipped.
+- Quiz / My places campus selection writes actual coordinates into the profile.
+  Primary place controls distance scoring and 5/10 km rings. Route destination
+  selection is independent and does not silently move the scoring anchor.
+- Custom destinations need both coordinates, or a map-picked pin in My places.
+  Renaming a place is not address geocoding. No typed address is transmitted to
+  a new geocoding provider.
+- Preferred and avoided neighbourhoods are separate comma-separated fields.
+  Suggestions come from the selected inventory's Neighbourhood values. Matching
+  is accent-insensitive, word-bounded and limited to those labels, not geographic
+  polygons, aliases or guessed addresses. Missing/custom names show no-match
+  feedback. Legacy free-form area notes remain notes, not guessed preferences.
+- A preferred match adds up to 3 base location points within the existing cap.
+  Avoided matches fail the brief and land outside parameters. City-only labels
+  cannot prove a neighbourhood is acceptable; an avoidance request marks those
+  rows unconfirmed until the neighbourhood is known.
+- Visible toggle borders/selection states and aria-pressed, fixed-size quiz
+  checkboxes, manual-coordinate validation and narrow-screen layout checked.
+- Tests: `node --test tests/*.test.cjs`, `node tests/browser.mjs`,
+  `node tests/campus-browser.mjs`. The last test also checks the live inventory
+  counts, campus routing, anchor preservation, areas and representative images.
+- Shared profile saving remains dependent on owner redeployment of Apps Script
+  v3. This release does not claim that a GitHub push updates Apps Script.

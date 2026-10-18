@@ -49,6 +49,8 @@ function getPois(){
   return poiListForScoring().filter(p => p && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lon)));
 }
 function activePoi(){
+  const campus=CampusTools.find(activeProfile().routeCampusId);
+  if(campus)return CampusTools.poi(campus);
   const ps = getPois();
   if(!ps.length) return null;
   return ps[Math.min(num(activeProfile().routePoi, 0), ps.length - 1)];
@@ -349,6 +351,8 @@ function computeScore(r){
       note = `drive ~${d} min vs ${maxMin} min limit`;
     }
     if(pts == null) return {na:true, note:"No distance known — set My places, or add coords / drive time"};
+    const areas=CampusTools.areaEvidence(r,activeProfile().answers,activeProfile().city);
+    if(areas.preferred.length){pts=Math.min(30,pts+3);note+=` · preferred area: ${areas.preferred.join(', ')}`;}
     const overLimit = (Number.isFinite(d) && d > maxMin) || (Number.isFinite(km) && km > maxKm);
     if(overLimit && hasDealBreaker("longCommute")) hardCaps.push("commute beyond your limit");
     return {pts, level: pts <= 12 ? "warn" : "ok", note};
@@ -679,6 +683,9 @@ function deriveListing(o){
 
 function profileRequirements(r){
   const p = activeProfile(), unknown=[], failed=[];
+  const areas=CampusTools.areaEvidence(r,p.answers,p.city);
+  if(areas.avoided.length)failed.push('avoided neighbourhood: '+areas.avoided.join(', '));
+  else if(areas.unknown&&CampusTools.areaNames(p.answers.avoidedAreas).length)unknown.push('neighbourhood');
   if(p.budgetFirm && Number.isFinite(r.RentNum) && Number.isFinite(budgetFor(r.MarketType)) && r.RentNum>budgetFor(r.MarketType))failed.push("maximum budget");
   const facts = compact([ListingRules.stated(r.Type), ListingRules.stated(r["Criteria fit"]),ListingRules.stated(r.Laundry),ListingRules.stated(r.PetsAllowed)]).toLowerCase();
   const knownBool=value=>truthy(value)?true:/^(false|no|not allowed)$/i.test(asText(value))?false:null;
@@ -1315,13 +1322,15 @@ let filterTimer=null;
 function renderDebounced(){ clearTimeout(filterTimer); filterTimer=setTimeout(()=>render(), 180); }
 ["search","drive"].forEach(id=>{const e=el(id);if(e)e.addEventListener("input",renderDebounced);});
 ["volume","market","neighbourhood","source"].forEach(id=>{const e=el(id);if(e)e.addEventListener("change",render);});
-function toggle(id,key){el(id).onclick=()=>{state[key]=!state[key];el(id).classList.toggle("active",state[key]);render();};}
+function toggle(id,key){el(id).setAttribute('aria-pressed',String(state[key]));el(id).onclick=()=>{state[key]=!state[key];el(id).classList.toggle("active",state[key]);el(id).setAttribute('aria-pressed',String(state[key]));render();};}
 toggle("under1000","under1000");toggle("parking","parking");toggle("internet","internet");toggle("newonly","newonly");
 document.querySelectorAll("[data-filter]").forEach(btn => {
   const key = btn.dataset.filter;
+  btn.setAttribute('aria-pressed',String(state[key]));
   btn.addEventListener("click", () => {
     state[key] = !state[key];
     btn.classList.toggle("active", state[key]);
+    btn.setAttribute('aria-pressed',String(state[key]));
     render();
   });
 });
@@ -1331,8 +1340,8 @@ const showUnmappedBtn=el("showUnmapped");
 if(showUnmappedBtn) showUnmappedBtn.onclick=()=>{state.showUnmapped=!state.showUnmapped;showUnmappedBtn.classList.toggle("active",state.showUnmapped);renderLeadPanel();};
 el("reset").onclick=()=>{state.under1000=state.parking=state.internet=state.newonly=false;
   ["notContacted","waitingReply","viewingBooked","goodOption","needsParking","needsInternet","needsAddress","needsJuly"].forEach(k=>state[k]=false);
-  ["under1000","parking","internet","newonly"].forEach(id=>el(id).classList.remove("active"));
-  document.querySelectorAll("[data-filter]").forEach(btn=>btn.classList.remove("active"));
+  ["under1000","parking","internet","newonly"].forEach(id=>{el(id).classList.remove("active");el(id).setAttribute('aria-pressed','false');});
+  document.querySelectorAll("[data-filter]").forEach(btn=>{btn.classList.remove("active");btn.setAttribute('aria-pressed','false');});
   ["search","volume","neighbourhood","source","drive"].forEach(id=>el(id).value="");
   state.sortKey="ScoreNum";state.sortDir=-1;render({fitMap:true});};
 document.querySelectorAll("th[data-k]").forEach(th=>th.addEventListener("click",()=>{
@@ -1408,13 +1417,17 @@ function renderRouteSelect(){
   const wrap=el("routewrap"), sel=el("routePoi");
   if(!wrap||!sel) return;
   const ps=getPois();
-  if(ps.length<1){ wrap.hidden=true; return; }
   wrap.hidden=false;
-  sel.innerHTML=ps.map((p,i)=>`<option value="${i}"${i===num(config.routePoi,0)?" selected":""}>${safe(poiName(p,i))}</option>`).join("");
+  const selected=config.routeCampusId,campuses=CampusTools.choices();
+  const current=CampusTools.find(selected);if(current&&!current.main)campuses.push(current);
+  sel.innerHTML=(ps.length?'<optgroup label="Your saved places">'+ps.map((p,i)=>`<option value="${i}"${!selected&&i===num(config.routePoi,0)?" selected":""}>${safe(poiName(p,i))}</option>`).join("")+'</optgroup>':'<option value="">Choose a destination</option>')+
+    '<optgroup label="Ontario main campuses">'+campuses.map(c=>`<option value="campus:${safe(c.id)}"${selected===c.id?' selected':''}>${safe(CampusTools.label(c))}</option>`).join('')+'</optgroup>';
 }
 const routeSel=el("routePoi");
 if(routeSel) routeSel.addEventListener("change",e=>{
-  config.routePoi=num(e.target.value,0); saveConfig(); render();
+  config.routeCampusId=e.target.value.startsWith('campus:')?e.target.value.slice(7):'';
+  if(!config.routeCampusId)config.routePoi=num(e.target.value,0);
+  saveConfig(); render();
 });
 
 function fillPoiPanel(){
@@ -1422,6 +1435,26 @@ function fillPoiPanel(){
     const row=document.querySelector(`.poirow[data-poi="${i}"]`);
     if(!row) continue;
     const p=(config.pois||[])[i]||{};
+    if(!row.querySelector('.campuscontrols')){
+      const box=document.createElement('div');box.className='campuscontrols';
+      box.innerHTML=`<input type="search" aria-label="Find campus for place ${i+1}" placeholder="Find a school or city"><select aria-label="Campus for place ${i+1}"></select><label><input type="checkbox"> Include satellite campuses</label>`;
+      row.prepend(box);
+      const search=box.querySelector('input[type=search]'),select=box.querySelector('select'),all=box.querySelector('input[type=checkbox]');
+      const fill=()=>{
+        const matches=CampusTools.choices(search.value,all.checked),current=CampusTools.find(row.dataset.campusId);
+        if(current&&!matches.some(c=>c.id===current.id))matches.unshift(current);
+        select.innerHTML='<option value="">Custom / map point</option>'+matches.map(c=>`<option value="${safe(c.id)}"${c.id===row.dataset.campusId?' selected':''}>${safe(CampusTools.label(c))}</option>`).join('');
+      };
+      search.oninput=fill;all.onchange=fill;
+      select.onchange=()=>{
+        row.dataset.campusId=select.value;const c=CampusTools.find(select.value);if(!c)return;
+        row.querySelector('[data-f=name]').value=CampusTools.label(c);
+        row.querySelector('[data-f=lat]').value=c.lat;row.querySelector('[data-f=lon]').value=c.lon;
+      };
+      box.fillCampusChoices=fill;
+    }
+    row.dataset.campusId=p.campusId||'';
+    row.querySelector('.campuscontrols').fillCampusChoices();
     row.querySelector('[data-f="name"]').value = asText(p.name);
     row.querySelector('[data-f="lat"]').value  = p.lat!=null&&p.lat!=="" ? p.lat : "";
     row.querySelector('[data-f="lon"]').value  = p.lon!=null&&p.lon!=="" ? p.lon : "";
@@ -1440,7 +1473,10 @@ function savePoiPanel(){
     const name=row.querySelector('[data-f="name"]').value.trim();
     const lat=parseFloat(row.querySelector('[data-f="lat"]').value);
     const lon=parseFloat(row.querySelector('[data-f="lon"]').value);
-    if(Number.isFinite(lat)&&Number.isFinite(lon)&&Math.abs(lat)<=90&&Math.abs(lon)<=180) pois.push({name:name||`Place ${pois.length+1}`,lat,lon});
+    if(Number.isFinite(lat)&&Number.isFinite(lon)&&Math.abs(lat)<=90&&Math.abs(lon)<=180){
+      const c=CampusTools.find(row.dataset.campusId),campusId=c&&c.lat===lat&&c.lon===lon?c.id:undefined;
+      pois.push({name:name||`Place ${pois.length+1}`,lat,lon,...(campusId?{campusId}:{})});
+    }
     else if(name) toast(`"${name}" needs coordinates — use Set on map, or right-click in Google Maps and copy them.`);
   }
   config.pois=pois.slice(0,MAX_POIS);
