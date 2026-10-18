@@ -2,7 +2,7 @@
 
 | Data / service | Purpose and location |
 |---|---|
-| Google Sheets | Shared listing facts, workflow states, optional named preference profiles. Known tabs load through native CSV export (including its Google-hosted redirect), preserving mixed text/numeric cells; custom named tabs retain the legacy query reader. |
+| Google Sheets | Shared listing facts, workflow states and named preference profiles (quiz answers, budgets, campus pins and weights). Profile saves target the Search Profiles tab after the v4 Apps Script deployment; browser storage retains a backup and unsent changes. Known listing tabs use native CSV export; custom named tabs retain the legacy query reader. |
 | Apps Script | Receives explicit workflow/profile saves; no automatic outbound contact |
 | GitHub Pages | Static site and CSV fallback snapshots; no custom backend |
 | Browser localStorage | Saved profiles, last successful Sheet cache, local UI state |

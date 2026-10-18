@@ -7,7 +7,7 @@
    score re-computes for the active one.
 
    Loaded BEFORE app.js so the scoring engine can read the active profile.
-   Stored locally; the questionnaire can explicitly save a shared Sheet profile.
+   Shared through the Sheet; browser storage keeps the active choice and backup.
    ========================================================================== */
 
 const MAX_POIS = 3;
@@ -43,7 +43,7 @@ const DEFAULT_PROFILE = {
   searchId: "",                   // shared inventory group, independent of profile name
   city: "",
   briefPending: false,
-  answers: {},                    // shared only when the user chooses Sheet save
+  answers: {},                    // saved with the named profile to the Sheet
   budgetIdeal: null,
   leaseMonths: "",
   timingLatest: "",

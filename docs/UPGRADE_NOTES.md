@@ -195,6 +195,28 @@ be independently confirmed. The cutoff for this pass was July 18, 2026.
   `scripts/prepare-peterborough-import.mjs` builds a review file only and requires
   those local evidence/review files; it never writes the live Sheet itself.
 
+## Permanent Shared Profiles - October 18, 2026
+
+- Quiz Save profile now targets Search Profiles automatically. Local storage is
+  a backup, not the only intended database. Existing device-only profiles migrate
+  when selected; My places and route preference saves use the same path.
+- Choose profile reloads shared answers on entry. Sheet copies supersede stale
+  local copies unless this device has pending edits. The active selection stays
+  device-local. Search, pagination and large-profile support are preserved.
+- Pending saves survive reloads and retry on Choose profile. No success toast is
+  shown without the endpoint's matching ID and revision acknowledgement.
+- Apps Script v4 lists profiles, upserts stable IDs under the document lock,
+  grows the tab as needed and rejects conflicting revisions. Identical retries
+  are idempotent. Conflicts keep local edits and offer an explicit Sheet-version
+  reload, never an automatic overwrite.
+- PASS: 22 unit tests, existing browser regressions and a three-isolated-device
+  integration test for create, update, conflict recovery and offline retries.
+  All QA profile writes are intercepted; no fake profiles enter the real Sheet.
+- BLOCKED for live writes until owner redeployment: live /exec still reported
+  `2026-06-01-v2` during this release. Prepared source is `2026-10-18-v4`.
+  Deploy > Manage deployments > Edit > New version > Deploy retains the URL.
+  Publishing GitHub Pages alone cannot activate this backend change.
+
 ## Additional Sources and Filters - October 18, 2026
 
 - Added Listing site options grouped by canonical platform with inventory counts,

@@ -6,6 +6,7 @@ const browser=await chromium.launch({channel:'msedge',headless:true});
 const errors=[];
 try{
   const page=await browser.newPage({viewport:{width:1440,height:1050}});
+  await page.route('https://script.google.com/**',route=>route.fulfill({json:{ok:true,capabilities:['workflow']}}));
   page.on('pageerror',e=>errors.push(String(e)));
   await page.goto('http://127.0.0.1:4186/?search=trent-peterborough');
   await page.locator('#startNewQuiz').waitFor();await page.click('#startNewQuiz');await page.click('#qnext');

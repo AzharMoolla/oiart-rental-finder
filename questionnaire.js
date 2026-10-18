@@ -1,10 +1,17 @@
-/* Eighteen-question brief, named profiles, and optional Sheet sharing. */
+/* Eighteen-question brief and Sheet-backed named profiles with local recovery. */
 (function(){
   "use strict";
   const $=id=>document.getElementById(id);
   const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const STEPS=["Budget & dates","Household","Commute","Home setup","Location & priorities","Viewings & save"];
-  let draft=null,step=0,opener=null,chooser=false,sharedWriteReady=false;
+  let draft=null,step=0,opener=null,chooser=false,sharedWriteReady=false,sharedReadReady=false;
+  const readStored=key=>{try{return JSON.parse(localStorage.getItem(key))||{};}catch{return {};}};
+  const pendingProfiles=new Map(Object.entries(readStored('hf_profile_pending')).filter(([id,p])=>p?.profile?.id===id));
+  const sheetRevisions=new Map();
+  const revisions=readStored('hf_profile_revisions');
+  const inFlight=new Set();
+  let sharedReadError='';
+  function persistSync(){try{localStorage.setItem('hf_profile_pending',JSON.stringify(Object.fromEntries(pendingProfiles)));localStorage.setItem('hf_profile_revisions',JSON.stringify(revisions));}catch{}}
   function input(id,label,value,type="text",attrs=""){
     return `<label class="quizfield" for="${id}"><span>${label}</span><input class="qinput" id="${id}" type="${type}" value="${esc(value)}" ${attrs}></label>`;
   }
@@ -56,7 +63,7 @@
       question(16,"Priorities and dealbreakers",`<div class="qsliders">${Object.keys(BASE_WEIGHTS).map(key=>`<label class="quizpriority">${esc(SCORE_SHORT[key]||key)}<input aria-label="${key} priority" type="range" min="1" max="5" step="1" data-pri="${key}" value="${p.priorities[key]}"><output>${p.priorities[key]}/5</output></label>`).join("")}</div>${checks("dealBreakers",[["noParking","No parking"],["overBudget","Over maximum budget"],["longCommute","Beyond commute limit"],["sharedBedroom","Shared bedroom"]],p.dealBreakers)}${input("otherDealbreakers","Other dealbreakers",a.otherDealbreakers)}`)+
       question(17,"Viewings",select("viewings","How can you view?",a.viewings,[["","Not decided"],["inPerson","In person"],["video","Video required"],["either","Either"]]))+
       question(18,"Temporary options",select("temporary","Short-term place while searching",a.temporary,[["","Not decided"],["yes","Open to it"],["no","Long-term only"]]))+
-      `<div class="quizsave">${input("profileName","Save profile as",p.name)}<label><input id="shareProfile" type="checkbox"${sharedWriteReady?"":" disabled"}> Save to the shared Sheet for friends / another device</label><p class="qhint">${sharedWriteReady?"Your profile is always saved on this device.":"Shared saving needs a one-time Sheet connection update. Saving on this device is ready."}</p></div>`;
+      `<div class="quizsave">${input("profileName","Save profile as",p.name)}<p class="qhint">${sharedWriteReady?"Saved to the shared Sheet, with a backup on this device.":"Sheet connection update needed. Your profile will stay on this device until it can sync."}</p></div>`;
     $("qbody").innerHTML=html;
     $("qbody").scrollTop=0;
     $("qbody").querySelectorAll("[data-pri]").forEach(el=>el.oninput=()=>{p.priorities[el.dataset.pri]=+el.value;el.nextElementSibling.textContent=el.value+"/5";});
@@ -147,26 +154,44 @@
   }
   async function finish(){
     collect();setRequirements();
-    const shared=$("shareProfile")?.checked;
     const saved=upsertProfile(draft);
     close();window.applyProfileChange({fitMap:true});
-    toast(profilesSavedLocally?`Saved "${saved.name}" on this device.`:"Browser storage is full or unavailable. This profile is only kept for this visit; save it to the Sheet to keep it.");
-    if(shared)await saveSharedProfile(saved);
+    await saveSharedProfile(saved);
   }
-  async function saveSharedProfile(p){
+  async function saveSharedProfile(p,{retry=false,quiet=false}={}){
+    const {fromSheet,...snapshot}=JSON.parse(JSON.stringify(p));
+    if(!retry){pendingProfiles.set(p.id,{profile:snapshot,expectedUpdatedAt:revisions[p.id]||''});persistSync();}
+    const pending=pendingProfiles.get(p.id);
+    if(!pending||pending.conflict||inFlight.has(p.id))return false;
+    if(!sharedWriteReady){
+      if(!quiet)toast(`"${p.name}" is kept on this device. Sheet saving needs the Apps Script update; it will retry when you open Choose profile.`);
+      return false;
+    }
+    inFlight.add(p.id);
     try{
-      const res=await fetch(WRITE_URL,{method:"POST",body:JSON.stringify({action:"saveProfile",profile:p,...(WRITE_TOKEN?{token:WRITE_TOKEN}:{})}),signal:AbortSignal.timeout(15000)});
+      const res=await fetch(WRITE_URL,{method:"POST",body:JSON.stringify({action:"saveProfile",profile:pending.profile,expectedUpdatedAt:pending.expectedUpdatedAt,...(WRITE_TOKEN?{token:WRITE_TOKEN}:{})}),signal:AbortSignal.timeout(15000)});
       const data=await res.json();
-      if(!res.ok || data.ok!==true || data.action!=="saveProfile")throw new Error(data.error||"Shared profile saving is not enabled on the deployed script yet");
-      toast(`Saved "${p.name}" to the shared Sheet.`);
-    }catch(e){toast(`${profilesSavedLocally?"Profile saved on this device.":"Profile is only kept for this visit."} Sheet save failed: ${e.message}`);}
+      if(data.code==='PROFILE_CONFLICT'){pending.conflict=true;throw new Error(data.error);}
+      if(!res.ok || data.ok!==true || data.action!=="saveProfile" || data.id!==p.id || !data.updatedAt)throw new Error(data.error||"The endpoint did not confirm a profile save");
+      revisions[p.id]=data.updatedAt;
+      sharedProfiles.set(p.id,normalizeProfile(pending.profile));
+      if(pendingProfiles.get(p.id)===pending)pendingProfiles.delete(p.id);
+      else pendingProfiles.get(p.id).expectedUpdatedAt=data.updatedAt;
+      persistSync();
+      if(!quiet)toast(`Saved "${p.name}" to the shared Sheet. Available on your other devices.`);
+      return true;
+    }catch(e){persistSync();if(!quiet)toast(`Sheet save failed: ${e.message} Your edits remain on this device.`);return false;}
+    finally{inFlight.delete(p.id);if(pendingProfiles.has(p.id)&&pendingProfiles.get(p.id)!==pending)saveSharedProfile(pendingProfiles.get(p.id).profile,{retry:true,quiet:true});}
   }
   async function loadSharedProfiles(){
     try{
-      const res=await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&headers=1&gid=197601017`,{cache:"no-store",signal:AbortSignal.timeout(5000)});
-      if(!res.ok)return;
-      const list=parseGviz(await res.text());
+      const url=sharedReadReady?`${WRITE_URL}?action=listProfiles`:`https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=197601017`;
+      const res=await fetch(url,{cache:"no-store",signal:AbortSignal.timeout(10000)});
+      if(!res.ok)throw new Error('HTTP '+res.status);
+      const list=sharedReadReady?(await res.json()).profiles:parseCsv(await res.text());
+      if(!Array.isArray(list))throw new Error('Invalid profile response');
       sharedProfiles.clear();
+      sharedReadError='';
       for(const row of list){
         if(!row.ProfileID || !row.ProfileJSON)continue;
         try{
@@ -174,30 +199,42 @@
           if(!p || typeof p.name!=="string" || p.id!==row.ProfileID)continue;
           if(isStarterProfile(p))continue;
           sharedProfiles.set(p.id,normalizeProfile(p));
+          sheetRevisions.set(p.id,String(row.UpdatedAt||''));
+          if(!pendingProfiles.has(p.id)){
+            revisions[p.id]=String(row.UpdatedAt||'');
+            const i=HF.list.findIndex(local=>local.id===p.id);
+            if(i>=0)HF.list[i]=normalizeProfile(p);else HF.list.push(normalizeProfile(p));
+          }
         }catch{}
       }
-    }catch{}
+      saveProfiles();persistSync();renderProfileSwitch();
+      if(!$("quiz").hidden&&chooser)window.applyProfileChange();
+      return true;
+    }catch(e){sharedReadError='Shared profiles could not load. Showing this device\'s saved copies.';return false;}
   }
   const sharedProfiles=new Map();
   async function checkSharedSaving(){
-    try{const res=await fetch(WRITE_URL,{signal:AbortSignal.timeout(5000)});const data=await res.json();sharedWriteReady=data.ok===true && !data.headerError && data.capabilities?.includes("saveProfile");}catch{sharedWriteReady=false;}
+    try{const res=await fetch(WRITE_URL,{cache:'no-store',signal:AbortSignal.timeout(5000)});const data=await res.json();sharedWriteReady=data.ok===true && !data.headerError && data.capabilities?.includes("profileRevisions");sharedReadReady=data.ok===true&&data.capabilities?.includes('listProfiles');}catch{sharedWriteReady=false;sharedReadReady=false;}
   }
   async function choose(){
     show();chooser=true;$("qtitle").textContent="Choose your search";
     $("qsteps").innerHTML="";$("qback").hidden=true;$("qnext").hidden=true;
     $("qbody").innerHTML='<p>Loading saved profiles...</p>';
-    await Promise.all([loadSharedProfiles(),checkSharedSaving()]);
+    await checkSharedSaving();
+    const loaded=await loadSharedProfiles();
+    if(loaded&&sharedWriteReady)for(const pending of [...pendingProfiles.values()])await saveSharedProfile(pending.profile,{retry:true,quiet:true});
     if($("quiz").hidden || !chooser)return;
     const byId=new Map(HF.list.map(p=>[p.id,{...p,fromSheet:false}]));
-    for(const p of sharedProfiles.values())if(!byId.has(p.id))byId.set(p.id,{...p,fromSheet:true});
+    for(const p of sharedProfiles.values())if(!pendingProfiles.has(p.id))byId.set(p.id,{...p,fromSheet:true});
+    for(const [id,pending] of pendingProfiles)if(pending.conflict&&sharedProfiles.has(id))byId.set('sheet:'+id,{...sharedProfiles.get(id),fromSheet:true,conflictCopy:true});
     const profiles=[...byId.values()].sort((a,b)=>a.name.localeCompare(b.name));
-    $("qbody").innerHTML=`<label class="quizfield" for="profileSearch"><span>Find a saved profile</span><input id="profileSearch" class="qinput" type="search" placeholder="Name or city" autocomplete="off"></label><p id="profileResultCount" class="qhint" aria-live="polite"></p><div class="profilechoices" id="profileChoices"></div><button class="linkbtn" id="moreProfiles" type="button" hidden>Show more profiles</button><button class="btn primary" id="startNewQuiz">Take the quiz for a new profile</button>`;
+    $("qbody").innerHTML=`<p class="qhint" id="profileSyncStatus" role="status">${esc(sharedReadError||(sharedWriteReady?'Shared Sheet connected.':"Shared saving needs the Apps Script update."))}${pendingProfiles.size?' '+pendingProfiles.size+' profile(s) waiting to sync.':''}</p><label class="quizfield" for="profileSearch"><span>Find a saved profile</span><input id="profileSearch" class="qinput" type="search" placeholder="Name or city" autocomplete="off"></label><p id="profileResultCount" class="qhint" aria-live="polite"></p><div class="profilechoices" id="profileChoices"></div><button class="linkbtn" id="moreProfiles" type="button" hidden>Show more profiles</button><button class="btn primary" id="startNewQuiz">Take the quiz for a new profile</button>`;
     let limit=40;
     function paintChoices(){
       const query=$("profileSearch").value.trim().toLocaleLowerCase();
       const matches=profiles.filter(p=>(p.name+" "+p.city).toLocaleLowerCase().includes(query));
       $("profileResultCount").textContent=matches.length?`${Math.min(limit,matches.length)} of ${matches.length} saved profiles`:"No matching profiles";
-      $("profileChoices").innerHTML=matches.slice(0,limit).map(p=>`<button class="profilechoice" data-profile-choice="${esc(p.id)}"><b>${esc(p.name)}</b><span>${esc(p.city||"All locations")} · ${p.fromSheet?"Shared Sheet":"This device"}</span></button>`).join("");
+      $("profileChoices").innerHTML=matches.slice(0,limit).map(p=>`<button class="profilechoice" data-profile-choice="${esc(p.conflictCopy?'sheet:'+p.id:p.id)}"><b>${esc(p.name)}</b><span>${esc(p.city||"All locations")} · ${p.conflictCopy?'Sheet version (resolve conflict)':p.fromSheet?"Shared Sheet":pendingProfiles.has(p.id)?'This device - not synced':"This device"}</span></button>`).join("");
       $("moreProfiles").hidden=limit>=matches.length;
     }
     $("profileSearch").oninput=()=>{limit=40;paintChoices();};
@@ -205,8 +242,10 @@
     $("profileChoices").onclick=e=>{
       const btn=e.target.closest("[data-profile-choice]");if(!btn)return;
       const p=byId.get(btn.dataset.profileChoice);if(!p)return;
+      if(p.conflictCopy){if(!confirm('Load the Sheet version and discard this device\'s pending edits to this profile?'))return;pendingProfiles.delete(p.id);revisions[p.id]=sheetRevisions.get(p.id)||'';persistSync();delete p.conflictCopy;}
       if(p.fromSheet)upsertProfile(p);else setActiveProfile(p.id);
       close();window.applyProfileChange({fitMap:true});
+      if(!p.fromSheet&&p.tuned)saveSharedProfile(p);
       if(!activeProfile().tuned)open(false);
     };
     paintChoices();

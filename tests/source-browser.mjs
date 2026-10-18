@@ -5,6 +5,7 @@ const url=process.env.BASE_URL||'http://127.0.0.1:4186/';
 const errors=[];
 try{
   const page=await browser.newPage({viewport:{width:1440,height:1000}});
+  await page.route('https://script.google.com/**',route=>route.fulfill({json:{ok:true,capabilities:['workflow']}}));
   page.on('pageerror',e=>errors.push(String(e)));
   await page.goto(url+'?search=trent-peterborough');
   await page.waitForFunction(()=>typeof ListingRules!=='undefined'&&allRows.length>0);

@@ -44,7 +44,7 @@ const config = new Proxy({}, {
   get: (_, k) => activeProfile()[k],
   set: (_, k, v) => { activeProfile()[k] = v; return true; }
 });
-function saveConfig(){ saveProfiles(); }
+function saveConfig(){ saveProfiles();if(window.saveSharedProfile)window.saveSharedProfile(activeProfile()); }
 function getPois(){
   return poiListForScoring().filter(p => p && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lon)));
 }

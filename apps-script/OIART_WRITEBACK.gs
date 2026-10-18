@@ -1,5 +1,5 @@
 /*
-  Rental Finder write-back endpoint (v3, header-driven)
+  Rental Finder write-back endpoint (v4, shared profiles)
 
   WHY THIS VERSION EXISTS
   -----------------------
@@ -21,7 +21,7 @@
      Version: "New version" > Deploy.   [Editing the existing deployment keeps
      the SAME /exec URL, so app.js needs no change.]
   3. Verify: open the /exec URL in a browser. You should see
-     "version":"2026-10-17-v3" and "saveProfile" inside "capabilities".
+     "version":"2026-10-18-v4" and "saveProfile" inside "capabilities".
 
   SECURITY MODEL
   --------------
@@ -33,7 +33,7 @@
   name to PROTECTED_FIELDS so it stays read-only to the endpoint.
 */
 
-const SHEET_VERSION = "2026-10-17-v3";
+const SHEET_VERSION = "2026-10-18-v4";
 const LISTINGS_SHEET_NAME = "Listings";
 const FALLBACK_LISTINGS_SHEET_NAME = "listings";
 
@@ -81,7 +81,7 @@ function doPost(e) {
     if (WRITE_TOKEN && String(payload.token || "") !== WRITE_TOKEN) {
       return json_({ok: false, error: "Unauthorized"});
     }
-    if (payload.action === "saveProfile") return saveSearchProfile_(payload.profile);
+    if (payload.action === "saveProfile") return saveSearchProfile_(payload.profile,payload.expectedUpdatedAt);
     const id = String(payload.id || "").trim();
     const updates = payload.fields || (payload.field ? {[payload.field]: payload.value} : {});
     if (!id) return json_({ok: false, error: "Missing id"});
@@ -132,13 +132,17 @@ function doPost(e) {
 }
 
 // Diagnostics so we can confirm what is actually deployed (no more guessing).
-function doGet() {
+function doGet(e) {
+  if(e && e.parameter && e.parameter.action === "listProfiles"){
+    try{return json_({ok:true,action:"listProfiles",profiles:searchProfileRows_(),version:SHEET_VERSION});}
+    catch(err){return json_({ok:false,error:String(err && err.message || err)});}
+  }
   const info = {
     ok: true,
     service: "OIART Rental Finder write-back",
     version: SHEET_VERSION,
     tokenRequired: !!WRITE_TOKEN,
-    capabilities: ["workflow", "saveProfile"],
+    capabilities: ["workflow", "saveProfile", "listProfiles", "profileRevisions"],
     profilesSheetId: 197601017
   };
   try {
@@ -171,23 +175,42 @@ function getListingsSheet_() {
   return sh;
 }
 
-function saveSearchProfile_(profile) {
+function searchProfileSheet_(){
+  const ss=SpreadsheetApp.getActiveSpreadsheet();
+  let sh=ss.getSheetByName("Search Profiles");
+  if(!sh){sh=ss.insertSheet("Search Profiles");sh.getRange(1,1,1,5).setValues([["ProfileID","Name","SearchID","ProfileJSON","UpdatedAt"]]);sh.setFrozenRows(1);}
+  if(sh.getRange(1,1,1,5).getValues()[0].join("|")!=="ProfileID|Name|SearchID|ProfileJSON|UpdatedAt")throw new Error("Unexpected profile headers");
+  return sh;
+}
+function searchProfileRows_(){
+  const sh=searchProfileSheet_();
+  return sh.getLastRow()<2?[]:sh.getRange(2,1,sh.getLastRow()-1,5).getValues().filter(function(r){return r[0] && r[3];}).map(function(r){
+    return {ProfileID:String(r[0]),Name:String(r[1]),SearchID:String(r[2]),ProfileJSON:String(r[3]),UpdatedAt:r[4] instanceof Date?r[4].toISOString():String(r[4] || "")};
+  });
+}
+function saveSearchProfile_(profile,expectedUpdatedAt) {
   if(!profile || typeof profile !== "object" || !/^[a-zA-Z0-9_-]{1,100}$/.test(String(profile.id || ""))) return json_({ok:false,error:"Invalid profile ID"});
   const name=String(profile.name || "").trim().slice(0,100);
   const encoded=JSON.stringify(profile);
   if(!name || encoded.length>20000) return json_({ok:false,error:"Profile name is missing or profile is too large"});
-  const ss=SpreadsheetApp.getActiveSpreadsheet();
-  const sh=ss.getSheetByName("Search Profiles");
-  if(!sh || sh.getSheetId()!==197601017) return json_({ok:false,error:"Search Profiles tab needs setup"});
-  const headers=sh.getRange(1,1,1,5).getValues()[0];
-  if(headers.join("|")!=="ProfileID|Name|SearchID|ProfileJSON|UpdatedAt") return json_({ok:false,error:"Unexpected profile headers"});
+  const sh=searchProfileSheet_();
   const ids=sh.getLastRow()>1 ? sh.getRange(2,1,sh.getLastRow()-1,1).getValues() : [];
   let target=sh.getLastRow()+1;
-  ids.forEach(function(row,i){if(String(row[0])===profile.id)target=i+2;});
+  let matches=0;
+  ids.forEach(function(row,i){if(String(row[0])===profile.id){target=i+2;matches++;}});
+  if(matches>1)return json_({ok:false,error:"Duplicate profile ID in Sheet"});
+  let previous="";
+  if(matches){const value=sh.getRange(target,5).getValue();previous=value instanceof Date?value.toISOString():String(value || "");}
+  if(expectedUpdatedAt !== undefined && String(expectedUpdatedAt || "")!==previous){
+    if(matches && String(sh.getRange(target,4).getValue())===encoded)return json_({ok:true,action:"saveProfile",id:profile.id,updatedAt:previous});
+    return json_({ok:false,code:"PROFILE_CONFLICT",error:"This profile changed on another device. Reload its Sheet version before editing."});
+  }
   if(target>sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(),20);
   const literal=function(value){const s=String(value || "");return /^[=+@-]/.test(s) ? "'"+s : s;};
-  sh.getRange(target,1,1,5).setValues([[profile.id,literal(name),literal(profile.searchId),encoded,new Date().toISOString()]]);
-  return json_({ok:true,action:"saveProfile",id:profile.id});
+  const updatedAt=new Date().toISOString();
+  sh.getRange(target,1,1,5).setValues([[profile.id,literal(name),literal(profile.searchId),encoded,updatedAt]]);
+  SpreadsheetApp.flush();
+  return json_({ok:true,action:"saveProfile",id:profile.id,updatedAt:updatedAt});
 }
 
 function ensureColumns_(sh, columns) {
