@@ -35,6 +35,8 @@ trust by 1.6. Largest-remainder rounding makes the final weights total exactly
   paired first two values mean all-in / not proven all-in. A firm budget uses
   10, 6, 4, 2, 1 above target. Over-budget dealbreakers compare with the actual
   **maximum**, not the preferred number. No profile budget means unknown cost fit.
+  A firm maximum also gates the category: a known over-budget price is outside
+  the brief even when the other components score very well.
 - **Parking:** explicit no/street-only 0; extra-fee 7; stated/confirmed available
   10; silence unknown. Negative wording beats an optimistic confirmation checkbox.
 - **Internet:** included 5, partial utilities 3, internet extra 2. Unknown stays

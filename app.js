@@ -679,6 +679,7 @@ function deriveListing(o){
 
 function profileRequirements(r){
   const p = activeProfile(), unknown=[], failed=[];
+  if(p.budgetFirm && Number.isFinite(r.RentNum) && Number.isFinite(budgetFor(r.MarketType)) && r.RentNum>budgetFor(r.MarketType))failed.push("maximum budget");
   const facts = compact([ListingRules.stated(r.Type), ListingRules.stated(r["Criteria fit"]),ListingRules.stated(r.Laundry),ListingRules.stated(r.PetsAllowed)]).toLowerCase();
   const knownBool=value=>truthy(value)?true:/^(false|no|not allowed)$/i.test(asText(value))?false:null;
   const evidence = {

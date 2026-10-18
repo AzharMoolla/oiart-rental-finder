@@ -43,10 +43,12 @@ try{
     const incomplete=deriveListing({...base,ID:'NO-INTERNET','Internet / utilities':''});
     const weights=weightsFor('rent');
     const missingId=deriveListing({...base,ID:'',_RowNumber:999});deriveListing(missingId);
-    return {wrong:wrong.FitCategory,incomplete:scoreLevelClass(incomplete),sum:Object.values(weights).reduce((a,b)=>a+b,0),missingId:missingId.NeedsId};
+    const overBudget=deriveListing({...base,ID:'OVER-MAX','Approx monthly share':1250});
+    return {wrong:wrong.FitCategory,incomplete:scoreLevelClass(incomplete),sum:Object.values(weights).reduce((a,b)=>a+b,0),missingId:missingId.NeedsId,overBudget:overBudget.FitCategory};
   });
   assert.equal(gates.wrong,'outside');assert.equal(gates.incomplete,'scorewarn');assert.equal(gates.sum,100);
   assert.equal(gates.missingId,true,'Missing-ID rows remain read-only after recalculation');
+  assert.equal(gates.overBudget,'outside','A firm maximum is not just a weak preference');
   await page.selectOption('#volume','outside');
   assert.equal(await page.locator('tr.mainrow').count(),1);
   await page.selectOption('#volume','');
